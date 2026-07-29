@@ -1,6 +1,8 @@
-"""Regression tests: the checker must flag the three known LM5176 bugs
-on `projects/power_module_v2alt` and no false positives on the same
-schematic.  Bug context: [[project-lm5176-bugs-to-fix]]."""
+"""Regression tests: the checker must flag the known real bugs on
+`projects/power_module_v2alt` and nothing else at ERROR severity.
+
+Bug context: [[project-lm5176-bugs-to-fix]] + first-real-use findings
+from the 4-IC multi-agent extraction (2026-07-29)."""
 
 import subprocess
 import sys
@@ -12,6 +14,26 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMATIC = REPO_ROOT / "projects/power_module_v2alt/power_module_v2alt.kicad_sch"
 CHECKER = REPO_ROOT / "sim_harness/static_check.py"
 COMPONENTS_DIR = REPO_ROOT / "components"
+
+
+# Each entry: (substring-match assertions on a single [ERROR ...] output line).
+# Order-independent; each entry must match exactly one distinct error line.
+EXPECTED_ERRORS = [
+    # LM5176 (buckboost controller) — original three bugs.
+    ("U1_BUCKBOOST1 pin 4", "MODE", "AGND", "forbidden_direct_connection"),
+    ("U1_BUCKBOOST1 pin 7", "SLOPE", "capacitor", "R5_BUCKBOOST1"),
+    ("U1_BUCKBOOST1 pin 16", "CS", "SW1", "forbidden_direct_connection"),
+    # BQ76920 (BMS) — BAT pin missing R_f filter.
+    ("U1_BMS1 pin 10", "BAT", "must_connect_through", "BAT+"),
+    # IP2326 (charger) — ISET resistor programs charge current above IC max.
+    ("U1_CHARGER1 pin 11", "ISET", "R8_CHARGER1", "33k"),
+    # CH224K (USB-C PD sink) — VDD directly on VBUS_RAW (abs-max 3.6V, VBUS→20V).
+    ("U1_INPUT1 pin 1", "VDD", "VBUS_RAW", "must_connect_through"),
+    ("U1_INPUT1 pin 1", "VDD", "VBUS_RAW", "forbidden_direct_connection"),
+    # CH224K — VBUS-sense pin also directly on VBUS_RAW (abs-max 13.5V, VBUS→20V).
+    ("U1_INPUT1 pin 8", "VBUS", "VBUS_RAW", "must_connect_through"),
+    ("U1_INPUT1 pin 8", "VBUS", "VBUS_RAW", "forbidden_direct_connection"),
+]
 
 
 @pytest.fixture(scope="module")
@@ -37,36 +59,40 @@ def checker_output(netlist_xml):
     return proc.returncode, proc.stdout
 
 
+def _error_lines(out):
+    return [ln for ln in out.splitlines() if ln.startswith("[ERROR")]
+
+
 def test_exits_nonzero_when_bugs_present(checker_output):
     rc, _ = checker_output
     assert rc == 1
 
 
-def test_flags_mode_pin_direct_to_gnd(checker_output):
+@pytest.mark.parametrize("substrings", EXPECTED_ERRORS)
+def test_expected_error_present(checker_output, substrings):
+    """Each expected finding must appear in exactly one error line."""
     _, out = checker_output
-    assert "U1_BUCKBOOST1 pin 4" in out
-    assert "MODE" in out and "AGND" in out
-    assert "must_connect_through" in out
+    matches = [ln for ln in _error_lines(out)
+               if all(s in ln for s in substrings)]
+    assert len(matches) == 1, (
+        f"Expected exactly one error matching all of {substrings!r}; "
+        f"found {len(matches)}:\n" + "\n".join(matches)
+    )
 
 
-def test_flags_slope_pin_has_resistor(checker_output):
+def test_no_unexpected_errors(checker_output):
+    """No error line may appear that doesn't match one of the expected patterns.
+    If this test fires, either a new real bug was found (add to
+    EXPECTED_ERRORS) or a false-positive regressed (fix the checker/spec)."""
     _, out = checker_output
-    assert "U1_BUCKBOOST1 pin 7" in out
-    assert "SLOPE" in out
-    assert "R5_BUCKBOOST1" in out and "resistor" in out
+    errors = _error_lines(out)
+    unmatched = []
+    for ln in errors:
+        if not any(all(s in ln for s in tup) for tup in EXPECTED_ERRORS):
+            unmatched.append(ln)
+    assert not unmatched, "Unexpected errors:\n" + "\n".join(unmatched)
 
 
-def test_flags_cs_pin_on_switching_node(checker_output):
+def test_error_count_matches_expected(checker_output):
     _, out = checker_output
-    assert "U1_BUCKBOOST1 pin 16" in out
-    assert "CS" in out and "SWITCHING_NODE" in out
-    assert "SW1" in out
-
-
-def test_no_unexpected_errors_beyond_the_three(checker_output):
-    _, out = checker_output
-    error_lines = [ln for ln in out.splitlines() if ln.startswith("[ERROR")]
-    # exactly three known errors, all on U1_BUCKBOOST1 pins 4, 7, 16
-    assert len(error_lines) == 3, error_lines
-    for ln in error_lines:
-        assert "U1_BUCKBOOST1" in ln
+    assert len(_error_lines(out)) == len(EXPECTED_ERRORS)

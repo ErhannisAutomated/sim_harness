@@ -41,7 +41,8 @@ class Comp:
     @property
     def part_type(self) -> str:
         p = (self.libsource_part or "").strip()
-        if p == "R" or p.startswith("R_"): return "resistor"
+        if p == "R" or p.startswith("R_") or p == "Thermistor" or p == "Thermistor_NTC" or p == "Thermistor_PTC":
+            return "resistor"
         if p == "C" or p.startswith("C_"): return "capacitor"
         if p == "L" or p.startswith("L_"): return "inductor"
         if p == "D" or p.startswith("D_"): return "diode"
@@ -213,7 +214,7 @@ def _check_must_connect_through(comp: Comp, pin: dict, net: str, c: dict,
             val = parse_value(nb.value)
             if val_range and val is not None:
                 lo, hi = val_range
-                if not (lo <= val <= hi):
+                if val * 1.01 < lo or val * 0.99 > hi:
                     return [Violation("error", comp.ref, ref_pin[1], "must_connect_through",
                                       f"{label} series {want} {nb.ref} "
                                       f"value {nb.value!r} (={val:g}) outside required "

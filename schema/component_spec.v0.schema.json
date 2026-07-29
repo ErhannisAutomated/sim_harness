@@ -26,7 +26,10 @@
       "properties": {
         "revision": { "type": "string" },
         "url": { "type": "string" },
-        "local_path": { "type": "string" },
+        "local_path": {
+          "type": "string",
+          "description": "Path to the cached datasheet, RELATIVE TO THIS SPEC FILE'S DIRECTORY. Convention: keep the PDF alongside v*.json under components/<MPN>/ so the whole component travels together."
+        },
         "sha256": { "type": "string" }
       }
     },
@@ -78,7 +81,7 @@
         },
         "voltage_range": {
           "$ref": "#/$defs/voltage_range",
-          "description": "Absolute-maximum operating voltage range on this pin, from the datasheet's abs-max table. Used by the abs_max_intersection rule."
+          "description": "Absolute-maximum voltage range on this pin, from the datasheet's abs-max table. NOT the operating/nominal range — v1 will add a separate operating_voltage_range field for that. v0 status: parsed but not yet exercised by an abs-max intersection rule."
         },
         "current_range": {
           "$ref": "#/$defs/current_range",
@@ -171,7 +174,7 @@
       "type": "object",
       "required": ["kind", "partner_index"],
       "additionalProperties": false,
-      "description": "This pin forms a differential pair with the named partner pin on the same component. Fails if the two pins share a net (short) or if their voltage_range intersections disagree.",
+      "description": "This pin forms a differential pair with the named partner pin on the same component. v0 status: informational only — the checker parses this constraint but does not act on it. Planned v1 semantics: (a) error if partner pins share a net (differential short); (b) error if the partner nets' abs-max envelopes cannot satisfy max_differential_v (requires abs-max intersection engine).",
       "properties": {
         "kind": { "const": "paired_with" },
         "partner_index": {
