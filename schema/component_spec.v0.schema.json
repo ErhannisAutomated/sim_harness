@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kicad-agent.local/schemas/component_spec.v0.schema.json",
+  "title": "Component Spec (v0)",
+  "description": "Machine-checkable pin-level constraints for an electronic component. Consumed by sim_harness/static_check.py to detect wiring bugs against a schematic netlist. v0 focuses on the classes of bug that appear at Layer 1 of the verification pyramid (abs-max violations, wrong series component, forbidden direct connections). Later versions will grow additional constraint kinds as new bug classes are discovered.",
+  "type": "object",
+  "required": ["spec_version", "mpn", "package", "pins"],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {
+      "const": "0",
+      "description": "Schema major version. Bumped on breaking changes."
+    },
+    "mpn": {
+      "type": "string",
+      "description": "Manufacturer Part Number. Used as the canonical key for this component; the checker matches schematic symbols to specs by MPN (via a component Value or MPN property)."
+    },
+    "manufacturer": { "type": "string" },
+    "package": {
+      "type": "string",
+      "description": "Physical package (e.g. TSSOP-28, DFN-8). Informational; not used for matching."
+    },
+    "datasheet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision": { "type": "string" },
+        "url": { "type": "string" },
+        "local_path": { "type": "string" },
+        "sha256": { "type": "string" }
+      }
+    },
+    "net_families": {
+      "type": "object",
+      "description": "Names for classes of net that constraints reference symbolically (e.g. 'AGND' → any net matching one of these regexes counts). The checker resolves a constraint's target_net_family by looking up the family here and testing every net in the design against its patterns.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["patterns"],
+        "additionalProperties": false,
+        "properties": {
+          "patterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Regex patterns (Python re syntax, matched with re.fullmatch against the net name; leading '/sheet/' is stripped first)."
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "pins": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pin" }
+    }
+  },
+  "$defs": {
+    "pin": {
+      "type": "object",
+      "required": ["index", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "string", "description": "Pad name for non-numeric pads (e.g. 'PAD', 'S1')." }
+          ],
+          "description": "Pad number/name as it appears in the KiCad symbol."
+        },
+        "name": {
+          "type": "string",
+          "description": "Datasheet pin name (e.g. 'CS', 'SLOPE', 'MODE'). Informational for the checker; used to make violation messages readable."
+        },
+        "function": {
+          "type": "string",
+          "description": "Free-form semantic tag (e.g. 'current_sense_positive', 'switching_node_buck', 'digital_input'). Informational."
+        },
+        "direction": {
+          "enum": ["input", "output", "bidirectional", "power_in", "power_out", "passive", "unspecified"]
+        },
+        "voltage_range": {
+          "$ref": "#/$defs/voltage_range",
+          "description": "Absolute-maximum operating voltage range on this pin, from the datasheet's abs-max table. Used by the abs_max_intersection rule."
+        },
+        "current_range": {
+          "$ref": "#/$defs/current_range",
+          "description": "Absolute-maximum operating current, if published. Informational at v0."
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint" },
+          "description": "Topological constraints that the pin's net must satisfy."
+        },
+        "may_be_unconnected": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, the checker will not warn when this pin is unconnected."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form. Use for constraints the schema can't yet express — those patterns get upstreamed into structured fields over time."
+        }
+      }
+    },
+    "voltage_range": {
+      "type": "object",
+      "required": ["min_v", "max_v"],
+      "additionalProperties": false,
+      "properties": {
+        "min_v": { "type": "number" },
+        "max_v": { "type": "number" },
+        "reference": {
+          "type": "string",
+          "default": "GND",
+          "description": "Net family name that the voltages are relative to. Defaults to 'GND'."
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "current_range": {
+      "type": "object",
+      "required": ["min_a", "max_a"],
+      "additionalProperties": false,
+      "properties": {
+        "min_a": { "type": "number" },
+        "max_a": { "type": "number" },
+        "note": { "type": "string" }
+      }
+    },
+    "constraint": {
+      "oneOf": [
+        { "$ref": "#/$defs/constraint_must_connect_through" },
+        { "$ref": "#/$defs/constraint_forbidden_direct_connection" },
+        { "$ref": "#/$defs/constraint_paired_with" }
+      ]
+    },
+    "constraint_must_connect_through": {
+      "type": "object",
+      "required": ["kind", "series_component", "to_net_family"],
+      "additionalProperties": false,
+      "description": "The pin's net must reach the named target family exclusively via a series two-terminal component of the specified type (and, optionally, value range). Fails if the pin is on the target net directly, or if it reaches the target through the wrong component type or a value outside the allowed range.",
+      "properties": {
+        "kind": { "const": "must_connect_through" },
+        "series_component": {
+          "enum": ["resistor", "capacitor", "inductor", "diode"]
+        },
+        "value_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number" },
+          "description": "Inclusive [min, max] range in SI base units (ohms / farads / henries). Optional."
+        },
+        "to_net_family": {
+          "type": "string",
+          "description": "Name declared in the parent spec's net_families."
+        },
+        "rationale": { "type": "string" }
+      }
+    },
+    "constraint_forbidden_direct_connection": {
+      "type": "object",
+      "required": ["kind", "to_net_family"],
+      "additionalProperties": false,
+      "description": "The pin's net may not match this family directly. Weaker than must_connect_through — use when the pin is allowed to float or to sit on a signal net, just not on the named rail.",
+      "properties": {
+        "kind": { "const": "forbidden_direct_connection" },
+        "to_net_family": { "type": "string" },
+        "rationale": { "type": "string" }
+      }
+    },
+    "constraint_paired_with": {
+      "type": "object",
+      "required": ["kind", "partner_index"],
+      "additionalProperties": false,
+      "description": "This pin forms a differential pair with the named partner pin on the same component. Fails if the two pins share a net (short) or if their voltage_range intersections disagree.",
+      "properties": {
+        "kind": { "const": "paired_with" },
+        "partner_index": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "string" }
+          ]
+        },
+        "max_differential_v": {
+          "type": "number",
+          "description": "Maximum |V(this) - V(partner)| the pair tolerates. Informational at v0."
+        },
+        "rationale": { "type": "string" }
+      }
+    }
+  }
+}
