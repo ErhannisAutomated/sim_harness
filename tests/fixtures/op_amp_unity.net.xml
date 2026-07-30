@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>synthetic op-amp fixture: unity-gain voltage follower. U1 IN+ = VIN, IN- = VOUT, OUT = VOUT. Verifies ac_model → .subckt emission + X-instantiation, DC unity gain, AC flat at 0 dB up to GBW.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTOP1</value><libsource lib="Test" part="TESTOP1"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="U1" pin="IN+"/>
+    </net>
+    <net code="2" name="VOUT">
+      <node ref="U1" pin="IN-"/>
+      <node ref="U1" pin="OUT"/>
+    </net>
+  </nets>
+</export>

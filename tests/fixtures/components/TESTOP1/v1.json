@@ -1,0 +1,17 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTOP1",
+  "package": "SYNTHETIC-3",
+  "pins": [
+    { "index": "IN+", "name": "IN+", "direction": "input" },
+    { "index": "IN-", "name": "IN-", "direction": "input" },
+    { "index": "OUT", "name": "OUT", "direction": "output" }
+  ],
+  "ac_model": {
+    "topology": "op_amp_single_pole",
+    "a0_db": 100,
+    "gbw_hz": 1000000,
+    "output_z_ohm": 100,
+    "pins": { "in_plus": "IN+", "in_minus": "IN-", "output": "OUT" }
+  }
+}

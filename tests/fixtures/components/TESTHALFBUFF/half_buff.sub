@@ -1,0 +1,5 @@
+* Synthetic vendor-style half-gain buffer.
+* Terminal order: in, out, gnd. V(out,gnd) = 0.5 * V(in,gnd).
+.subckt TESTHALFBUFF in out gnd
+E1 out gnd in gnd 0.5
+.ends

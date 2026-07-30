@@ -53,6 +53,14 @@
     "pins": {
       "type": "array",
       "items": { "$ref": "#/$defs/pin" }
+    },
+    "ac_model": {
+      "$ref": "#/$defs/ac_model",
+      "description": "Small-signal (AC + DC operating-point) behavioral model for this IC. When present, the runner emits an auto-generated SPICE .subckt for the topology and instantiates it in place of any per-pin dc_model on the ac_model-owned pins. Per-pin dc_checks still evaluate against the solved node voltages. Consumed by Layer 3a (op-point), Layer 4a (AC sweep), and future Layer 4b (loop-stability). Complements — but does not replace — a vendor-supplied `behavioral_spice_subckt` (which wins if both are given)."
+    },
+    "behavioral_spice_subckt": {
+      "$ref": "#/$defs/behavioral_spice_subckt",
+      "description": "Path to an external SPICE .subckt (e.g. a vendor-published behavioral model). When present, the runner `.include`s the file and instantiates the named subckt with terminals in the given order. Overrides `ac_model` and per-pin `dc_model` for the mapped pins."
     }
   },
   "$defs": {
@@ -297,6 +305,85 @@
           }
         }
       ]
+    },
+    "ac_model": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["topology", "a0_db", "gbw_hz", "pins"],
+          "description": "Canonical single-pole op-amp: differential input × A0 → single-pole rolloff at f_p = GBW/A0 → low-impedance output. Suitable for most general-purpose op-amps whose datasheet advertises A0 (open-loop DC gain, dB) and GBW (gain-bandwidth product, Hz). Output impedance defaults to 100 Ω if unspecified. The runner emits one `.subckt` per matched IC (numbers baked in) and instantiates it as `X<ref> <inp_net> <inm_net> <out_net> OPAMP_SP_<ref>`.",
+          "properties": {
+            "topology": { "const": "op_amp_single_pole" },
+            "a0_db": {
+              "type": "number",
+              "description": "Open-loop DC gain in dB (e.g., 100 for 100000 V/V). Corresponds to the datasheet's 'Large-signal voltage gain' or 'A_VOL'."
+            },
+            "gbw_hz": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Gain-bandwidth product in Hz. Corresponds to the datasheet's 'Gain-Bandwidth Product' or 'Unity-Gain Bandwidth'."
+            },
+            "output_z_ohm": {
+              "type": "number",
+              "minimum": 0,
+              "default": 100,
+              "description": "Open-loop output impedance in Ω. Matters for stability with capacitive loads (Layer 4b). Datasheets rarely publish this — 100 Ω is a defensible default for general-purpose parts."
+            },
+            "pins": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["in_plus", "in_minus", "output"],
+              "description": "Which pin (by index — either the numeric pad or a schematic-symbol alias like 'IN+') plays each role. Power supply pins (V+, V-) are intentionally omitted from the canonical model — the ideal-source assumption is fine at Layer 3/4a. If a spec sets rail-following dc_models on V+/V-, those still emit (they just don't participate in the ac_model subckt).",
+              "properties": {
+                "in_plus":  { "$ref": "#/$defs/pin_index_ref" },
+                "in_minus": { "$ref": "#/$defs/pin_index_ref" },
+                "output":   { "$ref": "#/$defs/pin_index_ref" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "pin_index_ref": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "string" }
+      ],
+      "description": "A pin's index as it appears in the schematic symbol. Must match one of the values in that pin's `pins[].index` (aliases are honoured — the runner tries each candidate)."
+    },
+    "behavioral_spice_subckt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "subckt_name", "terminals"],
+      "description": "Reference to an external SPICE .subckt file (typically a vendor-published behavioral or macromodel).",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the .lib / .sub / .cir file containing the .subckt definition, RELATIVE TO THIS SPEC FILE'S DIRECTORY. Convention: keep the file alongside v*.json under components/<MPN>/."
+        },
+        "subckt_name": {
+          "type": "string",
+          "description": "The name after `.subckt` in the file (SPICE is not case-sensitive; the runner emits verbatim)."
+        },
+        "terminals": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered list of subckt terminals paired with the schematic pin they map to. Order MUST match the .subckt declaration order — SPICE X-lines are positional. Every schematic-side pin_index must resolve to a pin in the netlist (aliases honoured).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subckt_terminal", "pin_index"],
+            "properties": {
+              "subckt_terminal": {
+                "type": "string",
+                "description": "Terminal name as it appears in the subckt declaration (for readability only; the runner ignores the string and uses list order)."
+              },
+              "pin_index": { "$ref": "#/$defs/pin_index_ref" }
+            }
+          }
+        }
+      }
     },
     "constraint_paired_with": {
       "type": "object",

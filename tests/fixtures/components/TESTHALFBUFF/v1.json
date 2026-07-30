@@ -1,0 +1,19 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTHALFBUFF",
+  "package": "SYNTHETIC-3",
+  "pins": [
+    { "index": 1, "name": "IN" },
+    { "index": 2, "name": "OUT" },
+    { "index": 3, "name": "GND" }
+  ],
+  "behavioral_spice_subckt": {
+    "path": "half_buff.sub",
+    "subckt_name": "TESTHALFBUFF",
+    "terminals": [
+      { "subckt_terminal": "in",  "pin_index": 1 },
+      { "subckt_terminal": "out", "pin_index": 2 },
+      { "subckt_terminal": "gnd", "pin_index": 3 }
+    ]
+  }
+}

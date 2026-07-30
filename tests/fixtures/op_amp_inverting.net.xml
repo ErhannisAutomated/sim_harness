@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>synthetic op-amp fixture: inverting amp with R_in=10k, R_f=100k → closed-loop DC gain = -10 (20 dB). Closed-loop bandwidth = GBW · β where β = R_in/(R_in+R_f) = 1/11 → ~91 kHz. Verifies ac_model composes with external Rs, negative-gain path, closed-loop BW reshaping.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTOP1</value><libsource lib="Test" part="TESTOP1"/></comp>
+    <comp ref="R1"><value>10k</value><libsource lib="Device" part="R"/></comp>
+    <comp ref="R2"><value>100k</value><libsource lib="Device" part="R"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="2" name="INM">
+      <node ref="R1" pin="2"/>
+      <node ref="R2" pin="1"/>
+      <node ref="U1" pin="IN-"/>
+    </net>
+    <net code="3" name="VOUT">
+      <node ref="R2" pin="2"/>
+      <node ref="U1" pin="OUT"/>
+    </net>
+    <net code="4" name="GND">
+      <node ref="U1" pin="IN+"/>
+    </net>
+  </nets>
+</export>

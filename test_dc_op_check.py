@@ -32,6 +32,12 @@ RC_LP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass.net.xml"
 RC_LP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass_scenario.json"
 RC_STEP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/rc_step.net.xml"
 RC_STEP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_step_scenario.json"
+OPAMP_UNITY_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_unity.net.xml"
+OPAMP_UNITY_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_unity_scenario.json"
+OPAMP_INV_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_inverting.net.xml"
+OPAMP_INV_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_inverting_scenario.json"
+HALFBUFF_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/half_buff.net.xml"
+HALFBUFF_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/half_buff_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
@@ -195,6 +201,58 @@ def test_negative_all_dc_check_kinds_fire(tmp_path):
     assert any("must be in [0, 5]"     in ln for ln in fail_lines), out
     # rationale is echoed on failing lines
     assert "negative-path: must_equal" in out
+
+
+@needs_ngspice_tmp
+def test_ac_model_unity_gain_buffer(tmp_path):
+    """Op-amp ac_model → auto-generated single-pole .subckt. Unity-gain
+    feedback: DC = 1.0V (ideal), AC flat at 0 dB below GBW=1 MHz, -3 dB
+    at GBW. Verifies subckt emission, X-instance wiring, and that the
+    A0/GBW numbers produce the theoretical response."""
+    rc, out, _ = _run_checker(OPAMP_UNITY_SCENARIO, OPAMP_UNITY_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"unity-gain buffer fixture unexpectedly failed:\n{out}"
+    assert "4 pass, 0 fail, 0 missing" in out
+    assert "VOUT = +1.0000 V" in out
+    # -3 dB at GBW should land between -2.5 and -3.5
+    import re
+    m = re.search(r"@ 1e\+06 Hz.*VOUT: ([+-]?\d+\.\d+) dB", out)
+    assert m, f"GBW point not found:\n{out}"
+    v = float(m.group(1))
+    assert -3.5 <= v <= -2.5, f"GBW gain off: {v} dB"
+
+
+@needs_ngspice_tmp
+def test_ac_model_inverting_amp(tmp_path):
+    """Op-amp ac_model combined with external R_in=10k, R_f=100k. DC gain
+    = -R_f/R_in = -10 (20 dB). Closed-loop -3 dB = GBW · β ≈ 90.9 kHz.
+    Verifies ac_model composes with external components and produces the
+    predicted closed-loop bandwidth reshape."""
+    rc, out, _ = _run_checker(OPAMP_INV_SCENARIO, OPAMP_INV_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"inverting-amp fixture unexpectedly failed:\n{out}"
+    assert "4 pass, 0 fail, 0 missing" in out
+    assert "VOUT = -0.999" in out  # -0.9999V ideal, small A0 error
+    # At the closed-loop -3 dB point, expect ~17 dB
+    import re
+    m = re.search(r"@ 90910 Hz.*VOUT: ([+-]?\d+\.\d+) dB", out)
+    assert m, f"closed-loop BW point not found:\n{out}"
+    v = float(m.group(1))
+    assert 16.5 <= v <= 17.5, f"closed-loop -3 dB off: {v} dB"
+
+
+@needs_ngspice_tmp
+def test_behavioral_spice_subckt_include_path(tmp_path):
+    """Externally-supplied .subckt: TESTHALFBUFF is 3-terminal, defined in
+    half_buff.sub (E1 out gnd in gnd 0.5). Verifies .include emission (path
+    resolved relative to the spec file), X-instance terminal ordering
+    (pin_index → subckt position), and that per-pin dc_models on those
+    pins are suppressed."""
+    rc, out, _ = _run_checker(HALFBUFF_SCENARIO, HALFBUFF_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"half-buff subckt fixture unexpectedly failed:\n{out}"
+    assert "1 pass, 0 fail, 0 missing" in out
+    assert "VOUT = +0.5000 V" in out
 
 
 @needs_ngspice_tmp

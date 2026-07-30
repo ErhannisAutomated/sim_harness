@@ -1,0 +1,10 @@
+{
+  "spec_version": "0",
+  "name": "half_buff_dc",
+  "description": "TESTHALFBUFF is a synthetic 3-terminal 0.5× buffer defined in half_buff.sub. VIN=1V → VOUT=0.5V. Verifies the behavioral_spice_subckt path: .include emission, X-instance with terminal ordering matching the .subckt declaration.",
+  "power_rails": { "VIN": 1.0 },
+  "expected": {
+    "VOUT": { "v": 0.5, "tolerance_v": 0.001,
+              "rationale": "Half-buffer subckt: E1 out gnd in gnd 0.5 → V(out,gnd) = 0.5·V(in,gnd) = 0.5V." }
+  }
+}

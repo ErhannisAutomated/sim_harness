@@ -14,6 +14,7 @@ is purely:
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import subprocess
@@ -166,8 +167,14 @@ def _emit_norton_pin(lines: list, comp_ref: str, matched_idx: str,
 
 
 def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
-                        rail_class_map: dict, used: set[str]):
-    """Walk the IC's pins; for each with a dc_model, emit its SPICE contribution."""
+                        rail_class_map: dict, used: set[str],
+                        skip_pin_indices: Optional[set[str]] = None):
+    """Walk the IC's pins; for each with a dc_model, emit its SPICE contribution.
+
+    `skip_pin_indices` — pins already covered by an `ac_model` or
+    `behavioral_spice_subckt` on this IC. Their per-pin dc_model is
+    suppressed to avoid double-driving the same node."""
+    skip = skip_pin_indices or set()
     for pin in spec.get("pins", []):
         dc = pin.get("dc_model")
         if dc is None or dc.get("kind") == "high_z":
@@ -177,6 +184,8 @@ def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
         if resolved is None:
             continue
         matched_idx, net = resolved
+        if matched_idx in skip:
+            continue
         node = spice_node(net)
         used.add(node)
 
@@ -203,6 +212,132 @@ def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
             lines.append(f"V_ic_{ic_tag} {internal} 0 DC {voltage:g}")
             lines.append(f"R_ic_{ic_tag} {internal} {node} {z:g}")
             used.add(internal)
+
+
+# ---------------------------------------------------------------------------
+# Behavioral IC models: ac_model (parametric) + behavioral_spice_subckt (vendor)
+# ---------------------------------------------------------------------------
+
+def _find_pin_by_index_ref(spec: dict, ref) -> Optional[dict]:
+    """Find the spec pin whose `index` matches `ref`. Honours aliases: if the
+    pin's `index` is an array, ref may match any element. `ref` may be int or
+    string (compared as strings)."""
+    want = str(ref)
+    for pin in spec.get("pins", []):
+        idx = pin.get("index")
+        if isinstance(idx, list):
+            if any(str(x) == want for x in idx):
+                return pin
+        elif str(idx) == want:
+            return pin
+    return None
+
+
+def _resolve_role_net(comp_ref: str, spec: dict, ref, nl: Netlist
+                       ) -> Optional[tuple[str, str]]:
+    """Given an ac_model / subckt terminal reference to a pin, look up the
+    corresponding net in the schematic. Returns (matched_idx, net) or None
+    if the pin can't be found in the spec or the netlist."""
+    pin = _find_pin_by_index_ref(spec, ref)
+    if pin is None:
+        return None
+    idx_field = pin["index"]
+    candidates = idx_field if isinstance(idx_field, list) else [idx_field]
+    return pin_net_lookup(comp_ref, candidates, nl)
+
+
+def _op_amp_single_pole_subckt(name: str, a0_db: float, gbw_hz: float,
+                                output_z_ohm: float) -> list[str]:
+    """Emit a canonical single-pole op-amp .subckt with the numbers baked in.
+
+    Topology:
+        E1  int 0 inp inm A0        ; ideal diff-amp × A0
+        R1  int mid 1               ; RC low-pass; R=1, C set so f_p = GBW/A0
+        C1  mid 0 <C>
+        E2  buf 0 mid 0 1           ; ideal unity buffer
+        Rout buf out ROUT           ; open-loop output impedance
+
+    At DC: V(out) = A0 · (V(inp) − V(inm)) − I(load)·ROUT
+    At AC: single pole at f_p = GBW/A0, so |gain| crosses 0 dB at f = GBW."""
+    a0 = 10 ** (a0_db / 20.0)
+    fp = gbw_hz / a0
+    c1 = 1.0 / (2 * math.pi * 1.0 * fp)   # R=1 baked in
+    return [
+        f".subckt {name} inp inm out",
+        f"E1 int 0 inp inm {a0:g}",
+        f"R1 int mid 1",
+        f"C1 mid 0 {c1:g}",
+        f"E2 buf 0 mid 0 1",
+        f"Rout buf out {output_z_ohm:g}",
+        f".ends",
+    ]
+
+
+def _emit_ac_model(subckt_lines: list, x_lines: list, comp: Comp, spec: dict,
+                    ac_model: dict, nl: Netlist, used: set[str]
+                    ) -> Optional[set[str]]:
+    """Emit the .subckt + X-instance for a parametric ac_model.
+
+    Appends the .subckt block to `subckt_lines` and the X-line to `x_lines`.
+    Returns the set of pin_index strings the model covers (so per-pin
+    `dc_model` emission can be suppressed on those pins), or None if any
+    required role pin could not be resolved."""
+    topology = ac_model.get("topology")
+    if topology != "op_amp_single_pole":
+        return None  # future topologies land here
+    pins = ac_model["pins"]
+    resolved: dict[str, tuple[str, str]] = {}
+    for role in ("in_plus", "in_minus", "output"):
+        got = _resolve_role_net(comp.ref, spec, pins[role], nl)
+        if got is None:
+            print(f"warning: {comp.ref} ac_model role {role!r} pin "
+                  f"{pins[role]!r} unresolved; skipping ac_model",
+                  file=sys.stderr)
+            return None
+        resolved[role] = got
+
+    subckt_name = f"OPAMP_SP_{spice_ref(comp.ref)}"
+    subckt_lines.extend(_op_amp_single_pole_subckt(
+        subckt_name,
+        a0_db=ac_model["a0_db"],
+        gbw_hz=ac_model["gbw_hz"],
+        output_z_ohm=ac_model.get("output_z_ohm", 100.0),
+    ))
+    n_inp = spice_node(resolved["in_plus"][1])
+    n_inm = spice_node(resolved["in_minus"][1])
+    n_out = spice_node(resolved["output"][1])
+    used.update([n_inp, n_inm, n_out])
+    x_lines.append(f"X{spice_ref(comp.ref)} {n_inp} {n_inm} {n_out} {subckt_name}")
+    return {matched_idx for (matched_idx, _) in resolved.values()}
+
+
+def _emit_subckt_instance(include_paths: set, x_lines: list, comp: Comp,
+                           spec: dict, spec_path: Path, subckt_ref: dict,
+                           nl: Netlist, used: set[str]) -> Optional[set[str]]:
+    """Emit `.include <path>` (deduped via include_paths) + X-instance for a
+    vendor-supplied .subckt. Returns the pin-index set covered, or None if
+    any terminal fails to resolve."""
+    path = (spec_path.parent / subckt_ref["path"]).resolve()
+    resolved: list[tuple[str, tuple[str, str]]] = []
+    for term in subckt_ref["terminals"]:
+        got = _resolve_role_net(comp.ref, spec, term["pin_index"], nl)
+        if got is None:
+            print(f"warning: {comp.ref} subckt terminal {term['subckt_terminal']!r} "
+                  f"→ pin_index {term['pin_index']!r} unresolved; skipping subckt",
+                  file=sys.stderr)
+            return None
+        resolved.append((term["subckt_terminal"], got))
+    include_paths.add(str(path))
+    node_tokens: list[str] = []
+    covered: set[str] = set()
+    for _, (matched_idx, net) in resolved:
+        node = spice_node(net)
+        used.add(node)
+        node_tokens.append(node)
+        covered.add(matched_idx)
+    x_lines.append(f"X{spice_ref(comp.ref)} {' '.join(node_tokens)} "
+                    f"{subckt_ref['subckt_name']}")
+    return covered
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +411,9 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
 
     # 2) walk every component, emit appropriate SPICE element(s)
     device_kinds_used: set[str] = set()
+    subckt_defs: list[str] = []       # .subckt blocks from ac_model
+    behavioral_x_lines: list[str] = []  # X-instances for ac_model / subckt
+    include_paths: set[str] = set()   # deduped .include targets
     for comp in nl.comps.values():
         kind = dc_kind(comp)
         if kind == "skip":
@@ -306,12 +444,41 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
             spec_hit = match_spec(comp, specs)
             if spec_hit is None:
                 continue
-            _emit_ic_dc_models(lines, comp, spec_hit[1], nl, rail_class_map, used_nodes)
+            spec_path, spec = spec_hit
+            # Precedence: behavioral_spice_subckt > ac_model > per-pin dc_model
+            owned: set[str] = set()
+            subckt_ref = spec.get("behavioral_spice_subckt")
+            ac_model = spec.get("ac_model")
+            if subckt_ref is not None:
+                cov = _emit_subckt_instance(include_paths, behavioral_x_lines,
+                                             comp, spec, spec_path, subckt_ref,
+                                             nl, used_nodes)
+                if cov:
+                    owned = cov
+            elif ac_model is not None:
+                cov = _emit_ac_model(subckt_defs, behavioral_x_lines, comp,
+                                      spec, ac_model, nl, used_nodes)
+                if cov:
+                    owned = cov
+            _emit_ic_dc_models(lines, comp, spec, nl, rail_class_map,
+                                used_nodes, skip_pin_indices=owned)
 
     # 2b) .model directives for whichever device kinds we emitted
     lines.append("")
     for dk in sorted(device_kinds_used):
         lines.append(_MODEL_LIBRARY[dk])
+
+    # 2c) .include lines for vendor behavioral subckts (deduped)
+    for path in sorted(include_paths):
+        lines.append(f".include {path}")
+
+    # 2d) auto-generated .subckt blocks from ac_model
+    for line in subckt_defs:
+        lines.append(line)
+
+    # 2e) X-instances for both ac_model and behavioral_spice_subckt
+    for line in behavioral_x_lines:
+        lines.append(line)
 
     # 3) 1 GΩ stabilizer on every non-GND node
     for node in sorted(used_nodes):

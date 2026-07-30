@@ -1,0 +1,25 @@
+{
+  "spec_version": "0",
+  "name": "op_amp_inverting_amp",
+  "description": "Inverting amp, R_in=10k, R_f=100k, VIN=0.1V. DC output = -R_f/R_in · VIN = -1.0V. Closed-loop DC gain = 20 dB. Closed-loop -3 dB point = GBW · β = GBW · 10k/110k ≈ 90.9 kHz.",
+  "power_rails": { "VIN": 0.1 },
+  "expected": {
+    "VOUT": { "v": -1.0, "tolerance_v": 0.005,
+              "rationale": "Ideal inverting: V(OUT) = -(R2/R1)·V(IN) = -10·0.1 = -1.0V. Error at A0=100 dB: |V(IN)|·(1+R2/R1)/A0 ≈ 11 µV." }
+  },
+  "ac_sweeps": {
+    "inverting_gain": {
+      "source_node": "VIN",
+      "output_node": "VOUT",
+      "sweep": { "kind": "decade", "start_hz": 10, "stop_hz": 10000000, "points_per_decade": 5 },
+      "expected": [
+        { "freq_hz": 100,   "magnitude_db": 20.0, "tolerance_db": 0.2,
+          "rationale": "DC/passband: 20·log10(R_f/R_in) = 20·log10(10) = 20.0 dB. 100 Hz is well below closed-loop BW ≈ 91 kHz." },
+        { "freq_hz": 10000, "magnitude_db": 20.0, "tolerance_db": 0.3,
+          "rationale": "Still in passband." },
+        { "freq_hz": 90910, "magnitude_db": 17.0, "tolerance_db": 0.5,
+          "rationale": "Closed-loop -3 dB: GBW · β = 1e6 · (10k/(10k+100k)) = 90.909 kHz. Expected magnitude = 20 - 3 = 17 dB." }
+      ]
+    }
+  }
+}

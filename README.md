@@ -1,7 +1,7 @@
 # sim_harness — PCB design-verification harness
 
 Layered checks that validate a schematic against machine-readable
-component specs. As of 2026-07-30, five layers shipped:
+component specs. As of 2026-07-30, six layers shipped:
 
 - **Layer 1** — static per-pin topology rules (`static_check.py`)
 - **Layer 3a** — DC operating-point solve of the linear network (`dc_op_check.py`)
@@ -10,9 +10,17 @@ component specs. As of 2026-07-30, five layers shipped:
 - **Layer 4a** — small-signal AC sweep with magnitude/dB expectations
 - **Layer 5a** — transient sim with PWL step stimulus and time-point expectations
 
+Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
+- Spec-level `ac_model` — parametric linear IC model (currently
+  `op_amp_single_pole`; A0 / GBW / output_z → auto-generated single-pole
+  `.subckt`). Used by both DC op-point (Layer 3a) and AC sweep (Layer 4a).
+- Spec-level `behavioral_spice_subckt` — reference to an external vendor
+  `.subckt` file. `.include`d verbatim; terminals wired in declaration order.
+
 Deferred: Layer 2 (topology comparator against vendor reference designs),
-Layer 4b (small-signal averaged models for regulator loops), Layer 5b/c/d
-(PWM stimulus, XSPICE code models in Rust, libngspice FFI).
+Layer 4b (loop-injection + margin extraction — builds on the ac_model
+substrate above), Layer 5b/c/d (PWM stimulus, XSPICE code models in Rust,
+libngspice FFI).
 
 ## Motivation
 
@@ -94,7 +102,17 @@ need `dangerouslyDisableSandbox: true`, or `/tmp/tmp*` needs to be in the
      `current_a` + `direction` (Norton).
    - **`dc_checks`** — Layer-3b assertions on the pin's solved DC voltage:
      `must_equal`, `must_exceed`, `must_be_below`, `must_be_in_range`.
-5. Validate: `python -c 'import json,jsonschema; jsonschema.Draft202012Validator(json.load(open("sim_harness/schema/component_spec.v0.schema.json"))).validate(json.load(open("components/<MPN>/v1.json")))'`.
+5. **Optional, IC-wide behavioral model.** For op-amps and similar linear
+   ICs, add a spec-level **`ac_model`** naming the topology + parameters
+   (`op_amp_single_pole` today; A0 in dB, GBW in Hz, output_z in Ω, plus
+   the (in_plus, in_minus, output) pin_index refs). The runner emits a
+   canonical `.subckt` per matched IC and instantiates it — you get DC
+   op-point + AC sweep behavior for free. For vendor SPICE models,
+   spec-level **`behavioral_spice_subckt`** points to a `.sub`/`.lib` file
+   with an ordered list of `(subckt_terminal, pin_index)` pairs; the file
+   is `.include`d and terminals wired positionally. Both suppress per-pin
+   `dc_model` emission on the covered pins.
+6. Validate: `python -c 'import json,jsonschema; jsonschema.Draft202012Validator(json.load(open("sim_harness/schema/component_spec.v0.schema.json"))).validate(json.load(open("components/<MPN>/v1.json")))'`.
 
 ## Current coverage
 
