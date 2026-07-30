@@ -1,0 +1,6 @@
+{
+  "spec_version": "0",
+  "name": "norton_fixture",
+  "description": "SYNTH_ISRC sources 100µA out of pin 1 into R1(10k)→GND. Expected V_LOAD = 1.0V. The dc_check in the spec verifies this without any scenario-side expected block.",
+  "power_rails": {}
+}

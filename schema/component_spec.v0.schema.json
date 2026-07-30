@@ -112,6 +112,11 @@
           "$ref": "#/$defs/dc_model",
           "description": "How this pin behaves in Layer-3a DC operating-point analysis. Omit for the safe default (`high_z` — pin has no explicit driver, node voltage is determined by whatever else is on its net)."
         },
+        "dc_checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dc_check" },
+          "description": "Layer-3b assertions on the pin's DC voltage. Evaluated after the operating-point solve. Each check compares the pin's solved node voltage against a datasheet-known threshold or expected value; a failure indicates the surrounding design has a wrong divider, wrong reference, missing enable network, etc. Move IC-specific knowledge from scenario `expected` blocks into these — one project-independent check, reused across every scenario that uses this IC."
+        },
         "notes": {
           "type": "string",
           "description": "Free-form. Use for constraints the schema can't yet express — those patterns get upstreamed into structured fields over time."
@@ -222,6 +227,74 @@
             { "required": ["voltage_v"] },
             { "required": ["follows_rail"] }
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "current_a", "direction"],
+          "description": "Pin is a Norton (ideal current) source. Use for pins that source or sink a specific current independent of the external voltage — internal current mirrors, charge-current-set outputs, soft-start charge currents, etc. Cannot be expressed as Thevenin.",
+          "properties": {
+            "kind": { "const": "sourced" },
+            "current_a": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Magnitude of the current in amps. Positive number; use `direction` to specify sense."
+            },
+            "direction": {
+              "enum": ["out_of_pin", "into_pin"],
+              "description": "`out_of_pin`: current flows from the pin into the external circuit (a source, e.g. LM5176 SS pin's 5µA charge current). `into_pin`: current flows from the external circuit into the pin (a sink)."
+            }
+          }
+        }
+      ]
+    },
+    "dc_check": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "voltage_v"],
+          "description": "Pin voltage must equal a specific value within a tolerance. Use for feedback pins that regulate against a datasheet reference (LM5176 FB=1.2V), fixed reference outputs, or any node whose steady-state DC value is fully determined by the surrounding network.",
+          "properties": {
+            "kind": { "const": "must_equal" },
+            "voltage_v": { "type": "number" },
+            "tolerance_v": { "type": "number", "minimum": 0, "default": 0.05 },
+            "rationale": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "threshold_v"],
+          "description": "Pin voltage must be strictly above a threshold. Use for enable / start-up / rising-edge thresholds — verifies the surrounding divider or driver actually crosses the trip point.",
+          "properties": {
+            "kind": { "const": "must_exceed" },
+            "threshold_v": { "type": "number" },
+            "rationale": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "threshold_v"],
+          "description": "Pin voltage must be strictly below a threshold. Use for shutdown / disable / falling-edge thresholds.",
+          "properties": {
+            "kind": { "const": "must_be_below" },
+            "threshold_v": { "type": "number" },
+            "rationale": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "min_v", "max_v"],
+          "description": "Pin voltage must lie in [min_v, max_v]. Use for absolute-max range checks (subsumes the voltage_range abs-max concept for DC), or valid-operating-window checks (e.g. LM5176 MODE pin's 1.38–2.22V CCM+hiccup window).",
+          "properties": {
+            "kind": { "const": "must_be_in_range" },
+            "min_v": { "type": "number" },
+            "max_v": { "type": "number" },
+            "rationale": { "type": "string" }
+          }
         }
       ]
     },

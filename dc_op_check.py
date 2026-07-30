@@ -186,62 +186,57 @@ def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
     """Walk the IC's pins; for each with a dc_model, emit the SPICE contribution."""
     for pin in spec.get("pins", []):
         dc = pin.get("dc_model")
-        if dc is None or dc.get("kind") != "driven":
-            continue  # high_z or missing → no explicit contribution
+        if dc is None or dc.get("kind") == "high_z":
+            continue
         # Resolve which schematic pin this is on (respecting aliases)
         idx_candidates = pin["index"] if isinstance(pin["index"], list) else [pin["index"]]
         resolved = _pin_net(comp.ref, idx_candidates, nl)
         if resolved is None:
             continue
-        _, net = resolved
+        matched_idx, net = resolved
         node = spice_node(net)
         used.add(node)
+        if dc.get("kind") == "sourced":
+            _emit_norton_pin(lines, comp.ref, matched_idx, node, dc)
+            continue
+        # kind == "driven" — fall through to the Thevenin block below
 
-        # Determine voltage
         if "voltage_v" in dc:
             voltage = dc["voltage_v"]
         elif "follows_rail" in dc:
-            rail_class = dc["follows_rail"]
-            actual_rail = rail_class_map.get(rail_class)
-            if actual_rail is None:
-                # Class not mapped by scenario → fall back to high_z (silent)
-                continue
-            # If the rail is already emitted as a voltage source, this pin is
-            # already sitting on the correct node. Just verify the pin's net
-            # matches — if not, the schematic has a mismatch we can't fix here.
-            actual_node = spice_node(actual_rail)
-            if actual_node != node:
-                # Bridge the pin's net to the rail's node with a small resistor.
-                # (In practice, the rail's voltage source will dominate.)
-                lines.append(f"* {comp.ref} pin {resolved[0]} ({pin['name']}) "
-                             f"follows rail class {rail_class!r} → net {actual_rail}")
-                lines.append(f"V_ic_{spice_ref(comp.ref)}_{resolved[0]} {node} 0 DC "
-                             f"{scenario_rails_lookup(actual_rail)}")
-                # But we don't have scenario visible here — kick this back to caller.
-                # For v0, we assume the pin IS wired to the rail net in the schematic
-                # (which is the intended pattern), so no bridge is needed.
+            # Rail-following pin: the scenario has already emitted a voltage
+            # source for the rail (or the rail is unmapped, in which case the
+            # pin falls back to high_z-equivalent).  We assume the pin is on
+            # the same schematic net as the rail (the usual pattern) and let
+            # the rail's own source drive the node — nothing to emit here.
             continue
         else:
             continue
 
         z = dc.get("impedance_ohms", 0.0)
-        ic_tag = f"{spice_ref(comp.ref)}_{spice_ref(str(resolved[0]))}"
+        ic_tag = f"{spice_ref(comp.ref)}_{spice_ref(matched_idx)}"
         if z <= 0:
             lines.append(f"V_ic_{ic_tag} {node} 0 DC {voltage:g}")
         else:
-            # Thevenin: V source in series with R, exposed at the pin node.
-            # Introduce an internal node.
             internal = f"n_thev_{ic_tag}"
             lines.append(f"V_ic_{ic_tag} {internal} 0 DC {voltage:g}")
             lines.append(f"R_ic_{ic_tag} {internal} {node} {z:g}")
             used.add(internal)
 
 
-def scenario_rails_lookup(rail_name):
-    # placeholder to satisfy the (unused) code path above; the v0 assumption
-    # is that follows_rail pins are already wired to the rail in the schematic,
-    # so the rail's own voltage source drives their node.
-    return 0.0
+def _emit_norton_pin(lines: list, comp_ref: str, matched_idx: str,
+                     node: str, dc: dict):
+    """SPICE: `I<name> N+ N-` sends positive current from + through the source
+    to − (externally: current LEAVES the − terminal). So to model a pin that
+    sources current OUT of the pin, put the pin at the − terminal
+    (`I ... 0 pin_node`). To sink current INTO the pin, put the pin at + (`I
+    ... pin_node 0`)."""
+    ic_tag = f"{spice_ref(comp_ref)}_{spice_ref(matched_idx)}"
+    current = dc["current_a"]
+    if dc["direction"] == "out_of_pin":
+        lines.append(f"I_ic_{ic_tag} 0 {node} DC {current:g}")
+    else:  # into_pin
+        lines.append(f"I_ic_{ic_tag} {node} 0 DC {current:g}")
 
 
 # --------------------------------------------------------------------------
@@ -319,6 +314,88 @@ def compare_expected(voltages: dict[str, float], scenario: dict) -> list[Result]
     return results
 
 
+@dataclass
+class CheckResult:
+    ic_ref: str
+    pin: str
+    pin_name: str
+    check_kind: str
+    description: str      # e.g. "must equal 1.2V ±0.02"
+    actual_v: Optional[float]
+    status: str           # 'pass' | 'fail' | 'missing'
+    rationale: str = ""
+
+
+def evaluate_dc_checks(nl: Netlist, specs: dict,
+                       voltages: dict[str, float]) -> list[CheckResult]:
+    """Evaluate every pin-level dc_check across the design. Returns a list
+    of CheckResults; one per (component × pin × check)."""
+    results: list[CheckResult] = []
+    for comp in nl.comps.values():
+        spec_hit = match_spec(comp, specs)
+        if spec_hit is None:
+            continue
+        spec = spec_hit[1]
+        for pin in spec.get("pins", []):
+            checks = pin.get("dc_checks") or []
+            if not checks:
+                continue
+            candidates = pin["index"] if isinstance(pin["index"], list) else [pin["index"]]
+            resolved = _pin_net(comp.ref, [str(c) for c in candidates], nl)
+            if resolved is None:
+                for c in checks:
+                    results.append(CheckResult(
+                        ic_ref=comp.ref, pin=str(candidates[0]),
+                        pin_name=pin["name"], check_kind=c["kind"],
+                        description=_describe_check(c),
+                        actual_v=None, status="missing",
+                        rationale=c.get("rationale", ""),
+                    ))
+                continue
+            matched_idx, net = resolved
+            sn = spice_node(net).lower()
+            actual = voltages.get(sn)
+            for c in checks:
+                if actual is None:
+                    status = "missing"
+                else:
+                    status = "pass" if _check_passes(c, actual) else "fail"
+                results.append(CheckResult(
+                    ic_ref=comp.ref, pin=matched_idx, pin_name=pin["name"],
+                    check_kind=c["kind"], description=_describe_check(c),
+                    actual_v=actual, status=status,
+                    rationale=c.get("rationale", ""),
+                ))
+    return results
+
+
+def _describe_check(c: dict) -> str:
+    k = c["kind"]
+    if k == "must_equal":
+        tol = c.get("tolerance_v", 0.05)
+        return f"must equal {c['voltage_v']:g} V ±{tol:g}"
+    if k == "must_exceed":
+        return f"must exceed {c['threshold_v']:g} V"
+    if k == "must_be_below":
+        return f"must be below {c['threshold_v']:g} V"
+    if k == "must_be_in_range":
+        return f"must be in [{c['min_v']:g}, {c['max_v']:g}] V"
+    return k
+
+
+def _check_passes(c: dict, v: float) -> bool:
+    k = c["kind"]
+    if k == "must_equal":
+        return abs(v - c["voltage_v"]) <= c.get("tolerance_v", 0.05)
+    if k == "must_exceed":
+        return v > c["threshold_v"]
+    if k == "must_be_below":
+        return v < c["threshold_v"]
+    if k == "must_be_in_range":
+        return c["min_v"] <= v <= c["max_v"]
+    return True  # unknown kind — don't fail-close on new rule kinds
+
+
 def format_results(results: list[Result]) -> str:
     lines = []
     for r in results:
@@ -374,18 +451,33 @@ def main() -> int:
     voltages = parse_node_voltages(output)
 
     results = compare_expected(voltages, scenario)
-    print(format_results(results))
-    print(f"\n{sum(1 for r in results if r.status == 'pass')} pass, "
-          f"{sum(1 for r in results if r.status == 'fail')} fail, "
-          f"{sum(1 for r in results if r.status == 'missing')} missing "
-          f"(of {len(results)} expected checks)")
+    check_results = evaluate_dc_checks(nl, specs, voltages)
+
+    if results:
+        print("--- scenario `expected` checks ---")
+        print(format_results(results))
+    if check_results:
+        print("--- component spec `dc_checks` ---")
+        for r in check_results:
+            tag = {"pass": "PASS   ", "fail": "FAIL   ", "missing": "MISSING"}[r.status]
+            actual = f"{r.actual_v:+.4f} V" if r.actual_v is not None else "(no voltage)"
+            print(f"[{tag}] {r.ic_ref} pin {r.pin} ({r.pin_name}): "
+                  f"{actual} — {r.description}")
+            if r.status == "fail" and r.rationale:
+                print(f"          rationale: {r.rationale}")
+
+    all_status = [r.status for r in results] + [r.status for r in check_results]
+    n_pass = sum(1 for s in all_status if s == "pass")
+    n_fail = sum(1 for s in all_status if s == "fail")
+    n_miss = sum(1 for s in all_status if s == "missing")
+    print(f"\n{n_pass} pass, {n_fail} fail, {n_miss} missing "
+          f"(of {len(all_status)} checks)")
 
     if not args.keep_deck and deck_path.exists():
-        # keep by default when there are failures (helps debugging)
-        if all(r.status == "pass" for r in results):
+        if all(s == "pass" for s in all_status):
             deck_path.unlink()
 
-    return 0 if all(r.status == "pass" for r in results) else 1
+    return 0 if all(s == "pass" for s in all_status) else 1
 
 
 if __name__ == "__main__":

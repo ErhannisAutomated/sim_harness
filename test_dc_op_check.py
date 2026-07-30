@@ -18,6 +18,8 @@ CHECKER = REPO_ROOT / "sim_harness/dc_op_check.py"
 COMPONENTS_DIR = REPO_ROOT / "components"
 FIXTURE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/divider.net.xml"
 FIXTURE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/divider_scenario.json"
+NORTON_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/norton.net.xml"
+NORTON_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/norton_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path):
@@ -66,9 +68,9 @@ def test_synthetic_divider_passes(tmp_path):
 def test_v2alt_full_pack_scenario_flags_fb_divider_bug(tmp_path):
     """Locks in bug #8 discovery: LM5176 FB divider (110k/10k) produces
     FB=1.0V given VOUT=12V, but the datasheet reference is 1.2V. The check
-    must FAIL, showing the actual 1.0V vs expected 1.2V. If this test starts
-    passing, either the divider was fixed (great — update the assertion) or
-    the LM5176 spec's dc_model was changed in a way that hides the bug."""
+    must FAIL, showing the actual 1.0V vs the LM5176's 1.2V reference. As
+    of Layer 3b the FB assertion lives in the LM5176 spec, not the scenario
+    — the check fires automatically for any project that uses this IC."""
     scenario = REPO_ROOT / "projects/power_module_v2alt/scenarios/full_pack_20v_usb.json"
     netlist = tmp_path / "v2alt.net.xml"
     subprocess.run(
@@ -79,6 +81,19 @@ def test_v2alt_full_pack_scenario_flags_fb_divider_bug(tmp_path):
     )
     rc, out, _ = _run_checker(scenario, netlist, tmp_path)
     assert rc == 1
-    assert "FAIL" in out and "/buckboost/FB" in out
-    assert "+1.0000 V" in out  # what the current 110k/10k divider actually gives
-    assert "expected +1.2000" in out
+    assert "FAIL" in out and "U1_BUCKBOOST1 pin 11 (FB)" in out
+    assert "+1.0000 V" in out                       # actual, from 110k/10k
+    assert "must equal 1.2 V" in out                # spec-level check description
+
+
+@needs_ngspice_tmp
+def test_norton_fixture_passes(tmp_path):
+    """Norton dc_model: SYNTH_ISRC sources 100µA out of pin 1 into R1(10k)→GND;
+    Ohm's law gives V=1.0V. The spec's dc_check verifies this without a
+    scenario-side expected block — proves both the Norton emission AND the
+    dc_check evaluation path."""
+    rc, out, _ = _run_checker(NORTON_SCENARIO, NORTON_NETLIST, tmp_path)
+    assert rc == 0, f"norton fixture unexpectedly failed:\n{out}"
+    assert "1 pass, 0 fail, 0 missing" in out
+    assert "U1 pin 1 (IOUT)" in out
+    assert "+1.0000 V" in out
