@@ -1,0 +1,25 @@
+{
+  "spec_version": "0",
+  "name": "rc_step",
+  "description": "Steps VIN 0→5V at t=1µs; watches V(VOUT) exponential charge with τ = R×C = 1kΩ × 1µF = 1ms. Expected V(τ) ≈ 63.2%, V(3τ) ≈ 95%, V(5τ) ≈ 99.3%.",
+  "power_rails": {
+    "VIN": 5.0
+  },
+  "tran_sweeps": {
+    "vin_step": {
+      "step_source": { "node": "VIN", "before_v": 0.0, "after_v": 5.0, "at_time_s": 1e-6, "rise_time_s": 1e-9 },
+      "sweep": { "step_s": 1e-5, "stop_s": 6e-3 },
+      "output_node": "VOUT",
+      "expected": [
+        { "time_s": 0,     "voltage_v": 0.0,  "tolerance_v": 0.01,
+          "rationale": "before the step — cap uncharged" },
+        { "time_s": 1e-3,  "voltage_v": 3.16, "tolerance_v": 0.05,
+          "rationale": "at t=τ, V(t) = 5(1 - e⁻¹) = 3.161 V" },
+        { "time_s": 3e-3,  "voltage_v": 4.75, "tolerance_v": 0.05,
+          "rationale": "at t=3τ, V(t) = 5(1 - e⁻³) = 4.751 V" },
+        { "time_s": 5e-3,  "voltage_v": 4.97, "tolerance_v": 0.05,
+          "rationale": "at t=5τ, V(t) = 5(1 - e⁻⁵) = 4.966 V" }
+      ]
+    }
+  }
+}

@@ -28,12 +28,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from static_check import load_netlist, load_specs                       # noqa: E402
 from spice import (                                                     # noqa: E402
-    build_spice_deck, run_ngspice, parse_node_voltages, parse_ac_output,
+    build_spice_deck, run_ngspice,
+    parse_node_voltages, parse_ac_output, parse_tran_output,
     spice_node, output_nodes_for_sweep,
 )
 from checks import (                                                    # noqa: E402
-    AcResult, Result, CheckResult,
-    compare_expected, evaluate_dc_checks, evaluate_ac_sweep,
+    AcResult, Result, CheckResult, TranResult,
+    compare_expected, evaluate_dc_checks, evaluate_ac_sweep, evaluate_tran_sweep,
     format_results,
 )
 
@@ -67,6 +68,17 @@ def _print_ac_results(ac_results: list[AcResult]):
         actual = f"{r.actual_db:+.2f} dB" if r.actual_db is not None else "(no data)"
         print(f"[{tag}] {r.sweep_name} @ {r.freq_hz:g} Hz → {r.output_node}: "
               f"{actual} (expected {r.expected_db:+.2f} ±{r.tolerance_db})")
+        if r.status == "fail" and r.rationale:
+            print(f"          rationale: {r.rationale}")
+
+
+def _print_tran_results(tran_results: list[TranResult]):
+    print("--- scenario `tran_sweeps` ---")
+    for r in tran_results:
+        tag = {"pass": "PASS   ", "fail": "FAIL   ", "missing": "MISSING"}[r.status]
+        actual = f"{r.actual_v:+.4f} V" if r.actual_v is not None else "(no data)"
+        print(f"[{tag}] {r.sweep_name} @ {r.time_s:g} s → {r.output_node}: "
+              f"{actual} (expected {r.expected_v:+.4f} ±{r.tolerance_v})")
         if r.status == "fail" and r.rationale:
             print(f"          rationale: {r.rationale}")
 
@@ -120,8 +132,21 @@ def main() -> int:
         ac_deck_path = args.work_dir / f"{scenario['name']}_ac_{sweep_name}.cir"
         ac_deck_path.write_text(ac_deck_text)
         ac_output = run_ngspice(ac_deck_path, args.work_dir)
-        samples = parse_ac_output(ac_output)
+        samples = parse_ac_output(ac_output, expected_nodes=out_nodes)
         ac_results.extend(evaluate_ac_sweep(sweep_name, sweep, samples))
+
+    # Transient sweeps — one ngspice run per sweep
+    tran_results: list[TranResult] = []
+    for sweep_name, sweep in scenario.get("tran_sweeps", {}).items():
+        out_nodes = [spice_node(n).lower() for n in output_nodes_for_sweep(sweep)]
+        tran_deck_text, _ = build_spice_deck(nl, specs, scenario,
+                                              tran_sweep=sweep,
+                                              tran_output_nodes=out_nodes)
+        tran_deck_path = args.work_dir / f"{scenario['name']}_tran_{sweep_name}.cir"
+        tran_deck_path.write_text(tran_deck_text)
+        tran_output = run_ngspice(tran_deck_path, args.work_dir)
+        samples = parse_tran_output(tran_output, expected_nodes=out_nodes)
+        tran_results.extend(evaluate_tran_sweep(sweep_name, sweep, samples))
 
     # Report
     if results:
@@ -131,10 +156,13 @@ def main() -> int:
         _print_dc_check_results(check_results)
     if ac_results:
         _print_ac_results(ac_results)
+    if tran_results:
+        _print_tran_results(tran_results)
 
     all_status = ([r.status for r in results]
                   + [r.status for r in check_results]
-                  + [r.status for r in ac_results])
+                  + [r.status for r in ac_results]
+                  + [r.status for r in tran_results])
     n_pass = sum(1 for s in all_status if s == "pass")
     n_fail = sum(1 for s in all_status if s == "fail")
     n_miss = sum(1 for s in all_status if s == "missing")
@@ -142,7 +170,10 @@ def main() -> int:
           f"(of {len(all_status)} checks)")
 
     if not args.keep_deck and all(s == "pass" for s in all_status):
-        for p in [deck_path] + list(args.work_dir.glob(f"{scenario['name']}_ac_*.cir")):
+        cleanup = ([deck_path]
+                   + list(args.work_dir.glob(f"{scenario['name']}_ac_*.cir"))
+                   + list(args.work_dir.glob(f"{scenario['name']}_tran_*.cir")))
+        for p in cleanup:
             if p.exists():
                 p.unlink()
 

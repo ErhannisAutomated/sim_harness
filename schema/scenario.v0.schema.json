@@ -45,6 +45,11 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/ac_sweep" },
       "description": "Layer-4a small-signal frequency sweeps. Each entry runs ngspice's .ac analysis with a 1V AC source at source_node, layered on top of the DC operating point (source_node's DC bias comes from its power_rails entry if declared, otherwise 0V). The checker parses complex node voltages at the expected frequencies and verifies magnitude (in dB) matches. Use for passive filter cutoff verification, decoupling network resonance checks, EMI filter response. NOT sufficient for regulator loop stability — that needs Layer 4b small-signal switcher models (deferred)."
+    },
+    "tran_sweeps": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/tran_sweep" },
+      "description": "Layer-5a transient time-domain sweeps. Each entry runs ngspice's .tran analysis with an optional step_source (PWL from before_v to after_v at at_time_s) replacing that node's DC rail. The checker samples the time-domain output at named times and verifies voltage matches. Use for RC/RLC step response, inrush current profiles, soft-start ramp verification. Later 5b/c/d (PWM stimulus, XSPICE code models, vendor SPICE, libngspice FFI) deferred."
     }
   },
   "$defs": {
@@ -91,6 +96,66 @@
         "tolerance_db": { "type": "number", "minimum": 0, "default": 1 },
         "output_node": { "type": "string" },
         "rationale": { "type": "string" }
+      }
+    },
+    "tran_sweep": {
+      "type": "object",
+      "required": ["sweep"],
+      "additionalProperties": false,
+      "properties": {
+        "sweep": {
+          "type": "object",
+          "required": ["step_s", "stop_s"],
+          "additionalProperties": false,
+          "properties": {
+            "step_s": {
+              "type": "number", "exclusiveMinimum": 0,
+              "description": "Maximum time step (ngspice may adapt smaller). Choose << smallest time constant of interest."
+            },
+            "stop_s": {
+              "type": "number", "exclusiveMinimum": 0,
+              "description": "Total simulation time. Choose >> 5τ for typical exponential responses to reach ~99% of final."
+            },
+            "start_s": {
+              "type": "number", "minimum": 0, "default": 0,
+              "description": "Optional start-time for output printing (default 0). Simulation still runs from 0 for accuracy."
+            }
+          }
+        },
+        "step_source": {
+          "type": "object",
+          "required": ["node", "before_v", "after_v", "at_time_s"],
+          "additionalProperties": false,
+          "description": "Applies a PWL step at the given node from before_v to after_v around at_time_s. Overrides any DC voltage source on that node for the tran run. Omit if no explicit stimulus is needed (e.g., using an initial-condition-driven natural response).",
+          "properties": {
+            "node":       { "type": "string" },
+            "before_v":   { "type": "number" },
+            "after_v":    { "type": "number" },
+            "at_time_s":  { "type": "number", "minimum": 0 },
+            "rise_time_s": { "type": "number", "exclusiveMinimum": 0, "default": 1e-9,
+              "description": "Transition duration. Default 1 ns for a near-ideal step; longer values model realistic supply ramps." }
+          }
+        },
+        "output_node": {
+          "type": "string",
+          "description": "Default node whose voltage is sampled at each expected point. Individual expected points may override with their own output_node."
+        },
+        "expected": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tran_expected_point" }
+        }
+      }
+    },
+    "tran_expected_point": {
+      "type": "object",
+      "required": ["time_s", "voltage_v"],
+      "additionalProperties": false,
+      "properties": {
+        "time_s":      { "type": "number", "minimum": 0 },
+        "voltage_v":   { "type": "number" },
+        "tolerance_v": { "type": "number", "minimum": 0, "default": 0.05 },
+        "output_node": { "type": "string" },
+        "rationale":   { "type": "string" }
       }
     },
     "expected_value": {

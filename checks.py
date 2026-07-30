@@ -204,3 +204,57 @@ def evaluate_ac_sweep(sweep_name: str, sweep: dict,
         results.append(AcResult(sweep_name, freq, out_node_raw, expected_db,
                                 tol, actual_db, status, rationale))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Scenario `tran_sweeps` (Layer 5a)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TranResult:
+    sweep_name: str
+    time_s: float
+    output_node: str
+    expected_v: float
+    tolerance_v: float
+    actual_v: Optional[float]
+    status: str
+    rationale: str = ""
+
+
+def _nearest_time_sample(samples: list[tuple[float, float]], target_s: float
+                          ) -> Optional[tuple[float, float]]:
+    if not samples:
+        return None
+    return min(samples, key=lambda s: abs(s[0] - target_s))
+
+
+def evaluate_tran_sweep(sweep_name: str, sweep: dict,
+                         samples: dict[str, list[tuple[float, float]]]
+                         ) -> list[TranResult]:
+    results: list[TranResult] = []
+    default_out = sweep.get("output_node")
+    for p in sweep.get("expected", []):
+        out_node_raw = p.get("output_node", default_out)
+        if out_node_raw is None:
+            continue
+        out_node = spice_node(out_node_raw).lower()
+        t = p["time_s"]
+        expected_v = p["voltage_v"]
+        tol = p.get("tolerance_v", 0.05)
+        rationale = p.get("rationale", "")
+        block = samples.get(out_node)
+        if not block:
+            results.append(TranResult(sweep_name, t, out_node_raw, expected_v,
+                                       tol, None, "missing", rationale))
+            continue
+        nearest = _nearest_time_sample(block, t)
+        if nearest is None:
+            results.append(TranResult(sweep_name, t, out_node_raw, expected_v,
+                                       tol, None, "missing", rationale))
+            continue
+        _, actual_v = nearest
+        status = "pass" if abs(actual_v - expected_v) <= tol else "fail"
+        results.append(TranResult(sweep_name, t, out_node_raw, expected_v,
+                                   tol, actual_v, status, rationale))
+    return results

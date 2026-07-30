@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>RC step-response fixture — R1(1k) + C1(1µF), τ = 1ms. VIN steps 0→5V at t=1µs; V(VOUT) charges as 5(1-exp(-t/τ)).</source></design>
+  <components>
+    <comp ref="R1"><value>1k</value><libsource lib="Device" part="R"/></comp>
+    <comp ref="C1"><value>1uF</value><libsource lib="Device" part="C"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="2" name="VOUT">
+      <node ref="R1" pin="2"/>
+      <node ref="C1" pin="1"/>
+    </net>
+    <net code="3" name="GND">
+      <node ref="C1" pin="2"/>
+    </net>
+  </nets>
+</export>

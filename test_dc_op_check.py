@@ -30,6 +30,8 @@ FAIL_DC_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/fail_dc_checks_scenar
 TEST_COMPONENTS_DIR = REPO_ROOT / "sim_harness/tests/fixtures/components"
 RC_LP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass.net.xml"
 RC_LP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass_scenario.json"
+RC_STEP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/rc_step.net.xml"
+RC_STEP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_step_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
@@ -156,6 +158,23 @@ def test_layer_4a_rc_lowpass(tmp_path):
     assert m, f"cutoff point not found in output:\n{out}"
     v_at_cutoff = float(m.group(1))
     assert -3.5 <= v_at_cutoff <= -2.5, f"cutoff off: {v_at_cutoff} dB"
+
+
+@needs_ngspice_tmp
+def test_layer_5a_rc_step_response(tmp_path):
+    """RC step-response fixture (R=1k, C=1µF, τ=1ms). VIN steps 0→5V at
+    t=1µs; V(VOUT) charges as 5(1-e^(-t/τ)). Verifies transient sweep
+    infrastructure: step_source PWL emission, .tran directive, time-domain
+    output parsing, expected-time-point comparison."""
+    rc, out, _ = _run_checker(RC_STEP_SCENARIO, RC_STEP_NETLIST, tmp_path)
+    assert rc == 0, f"tran fixture unexpectedly failed:\n{out}"
+    assert "4 pass, 0 fail, 0 missing" in out
+    # V(τ) ≈ 3.16V — verify it lands inside tolerance
+    import re
+    m = re.search(r"@ 0\.001 s.*VOUT: ([+-]?\d+\.\d+) V", out)
+    assert m, f"τ time-point not found:\n{out}"
+    v_tau = float(m.group(1))
+    assert 3.10 <= v_tau <= 3.22, f"V(τ) off: {v_tau}V (theory 3.161V)"
 
 
 @needs_ngspice_tmp
