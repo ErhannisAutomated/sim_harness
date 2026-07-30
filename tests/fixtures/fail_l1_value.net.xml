@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>negative-path Layer-1 value_range fixture. U1 pin 1 needs a series capacitor in [1nF, 100nF] to GND; the fixture wires C1=100µF between the pin and GND — right component TYPE, wrong VALUE.</source></design>
+  <components>
+    <comp ref="U1"><value>FAIL_TESTBED_L1_VALUE</value><libsource lib="Test" part="FAIL_TESTBED_L1_VALUE"/><property name="MPN" value="FAIL_TESTBED_L1_VALUE"/></comp>
+    <comp ref="C1"><value>100uF</value><libsource lib="Device" part="C"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="SLOPE_NET">
+      <node ref="U1" pin="1"/>
+      <node ref="C1" pin="1"/>
+    </net>
+    <net code="2" name="GND">
+      <node ref="C1" pin="2"/>
+    </net>
+  </nets>
+</export>

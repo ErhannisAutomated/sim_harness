@@ -1,0 +1,10 @@
+{
+  "spec_version": "0",
+  "name": "divider_missing",
+  "description": "Negative-path fixture: scenario expected references a nonexistent node GHOST_NODE (not present in the divider netlist). The checker must report status='missing' and exit nonzero — silent-pass on unknown nodes would let typos hide.",
+  "power_rails": { "VIN": 12.0 },
+  "expected": {
+    "GHOST_NODE": { "v": 5.0, "tolerance_v": 0.01,
+                    "rationale": "Node does not exist in the divider netlist." }
+  }
+}

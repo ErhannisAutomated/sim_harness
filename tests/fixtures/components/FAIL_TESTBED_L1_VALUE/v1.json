@@ -1,0 +1,26 @@
+{
+  "spec_version": "0",
+  "mpn": "FAIL_TESTBED_L1_VALUE",
+  "manufacturer": "Test Fixture",
+  "package": "N/A",
+  "net_families": {
+    "GND": { "patterns": ["GND"] }
+  },
+  "pins": [
+    {
+      "index": 1,
+      "name": "SLOPE_LIKE",
+      "function": "test_pin_needs_series_cap_in_range",
+      "direction": "input",
+      "constraints": [
+        {
+          "kind": "must_connect_through",
+          "series_component": "capacitor",
+          "value_range": [1e-9, 1e-7],
+          "to_net_family": "GND",
+          "rationale": "negative-path fixture: spec requires a series capacitor in [1nF, 100nF]. Fixture wires C1=100µF (way out of range). Layer 1 must flag the value_range violation."
+        }
+      ]
+    }
+  ]
+}

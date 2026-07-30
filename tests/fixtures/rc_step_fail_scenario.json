@@ -1,0 +1,17 @@
+{
+  "spec_version": "0",
+  "name": "rc_step_fail",
+  "description": "Negative-path fixture: V(τ) is asserted to be 10.0V (actual is 3.16V for a 5V step) — the check MUST fail. Locks in that Layer-5a's tran evaluator returns FAIL, not silent-pass.",
+  "power_rails": { "VIN": 5.0 },
+  "tran_sweeps": {
+    "vin_step": {
+      "step_source": { "node": "VIN", "before_v": 0.0, "after_v": 5.0, "at_time_s": 1e-6, "rise_time_s": 1e-9 },
+      "sweep": { "step_s": 1e-5, "stop_s": 2e-3 },
+      "output_node": "VOUT",
+      "expected": [
+        { "time_s": 1e-3, "voltage_v": 10.0, "tolerance_v": 0.05,
+          "rationale": "Wrong on purpose: actual is 3.16V at τ; asserting 10V must produce FAIL." }
+      ]
+    }
+  }
+}

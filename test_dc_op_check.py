@@ -38,19 +38,25 @@ OPAMP_INV_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_inverting.net
 OPAMP_INV_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_inverting_scenario.json"
 HALFBUFF_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/half_buff.net.xml"
 HALFBUFF_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/half_buff_scenario.json"
+OPAMP_SUPPRESS_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_unity_suppress.net.xml"
+HALFBUFF_PRECEDENCE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/half_buff_precedence.net.xml"
+DIVIDER_MISSING_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/divider_missing_scenario.json"
+RC_LP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass_fail_scenario.json"
+RC_STEP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_step_fail_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
-                 components_dir: Path = COMPONENTS_DIR):
+                 components_dir: Path = COMPONENTS_DIR,
+                 keep_deck: bool = False):
     env = os.environ.copy()
     env["TMPDIR"] = str(work_dir)
-    proc = subprocess.run(
-        [sys.executable, str(CHECKER), str(scenario),
-         "--netlist", str(netlist),
-         "--components-dir", str(components_dir),
-         "--work-dir", str(work_dir)],
-        capture_output=True, text=True, env=env,
-    )
+    cmd = [sys.executable, str(CHECKER), str(scenario),
+           "--netlist", str(netlist),
+           "--components-dir", str(components_dir),
+           "--work-dir", str(work_dir)]
+    if keep_deck:
+        cmd.append("--keep-deck")
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -253,6 +259,71 @@ def test_behavioral_spice_subckt_include_path(tmp_path):
     assert rc == 0, f"half-buff subckt fixture unexpectedly failed:\n{out}"
     assert "1 pass, 0 fail, 0 missing" in out
     assert "VOUT = +0.5000 V" in out
+
+
+@needs_ngspice_tmp
+def test_negative_ac_model_suppresses_per_pin_dc_model(tmp_path):
+    """TESTOP_SUPPRESS declares BOTH ac_model AND a per-pin dc_model
+    (driven 5.0V) on OUT. The ac_model must win — VOUT should read
+    ~1.0V (op-amp unity-gain behavior), NOT 5.0V (driven behavior).
+    If suppression regresses, ngspice will either double-drive VOUT
+    to 5V or fail to solve."""
+    rc, out, _ = _run_checker(OPAMP_UNITY_SCENARIO, OPAMP_SUPPRESS_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"suppression test unexpectedly failed:\n{out}"
+    assert "VOUT = +1.0000 V" in out
+    assert "+5.0000" not in out, "OUT pin dc_model=5V leaked through — ac_model didn't suppress it"
+
+
+@needs_ngspice_tmp
+def test_negative_behavioral_subckt_precedence_over_ac_model(tmp_path):
+    """TESTHALFBUFF_AC declares BOTH behavioral_spice_subckt (0.5×
+    half-buffer) AND ac_model (op-amp). behavioral must win — the
+    generated deck should .include half_buff.sub and NOT emit any
+    OPAMP_SP_ subckt. Runtime: VOUT = 0.5V (half-buffer)."""
+    rc, out, _ = _run_checker(HALFBUFF_SCENARIO, HALFBUFF_PRECEDENCE_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR,
+                              keep_deck=True)
+    assert rc == 0, f"precedence test unexpectedly failed:\n{out}"
+    assert "VOUT = +0.5000 V" in out
+    # Inspect the emitted deck: only behavioral X-instance, no ac_model subckt
+    deck = (tmp_path / "half_buff_dc.cir").read_text()
+    assert ".include" in deck and "half_buff.sub" in deck, deck
+    assert "OPAMP_SP_" not in deck, "ac_model subckt leaked into deck when behavioral was set"
+    assert "TESTHALFBUFF" in deck, deck
+
+
+@needs_ngspice_tmp
+def test_negative_missing_node_reports_missing_and_exits_nonzero(tmp_path):
+    """Scenario `expected` references GHOST_NODE which isn't in the
+    divider netlist. Must produce a MISSING status and rc=1 — silent
+    pass on unknown nodes would let typos in scenarios hide."""
+    rc, out, _ = _run_checker(DIVIDER_MISSING_SCENARIO, FIXTURE_NETLIST, tmp_path)
+    assert rc == 1, f"missing-node case should fail; got rc=0:\n{out}"
+    assert "MISSING" in out and "GHOST_NODE" in out
+    assert "0 pass, 0 fail, 1 missing" in out
+
+
+@needs_ngspice_tmp
+def test_negative_ac_wrong_magnitude_fails(tmp_path):
+    """AC expected magnitude at cutoff asserted as 0 dB (actual: -3 dB).
+    Locks in that the Layer-4a evaluator returns FAIL when actual
+    diverges from expected — a silent-pass bug would let wrong
+    magnitudes ship."""
+    rc, out, _ = _run_checker(RC_LP_FAIL_SCENARIO, RC_LP_NETLIST, tmp_path)
+    assert rc == 1, f"AC fail case should exit nonzero; got rc=0:\n{out}"
+    assert "FAIL" in out and "vin_to_vout @ 159 Hz" in out
+    assert "0 pass, 1 fail" in out
+
+
+@needs_ngspice_tmp
+def test_negative_tran_wrong_voltage_fails(tmp_path):
+    """Transient expected voltage at t=τ asserted as 10V (actual: 3.16V).
+    Locks in that the Layer-5a evaluator returns FAIL."""
+    rc, out, _ = _run_checker(RC_STEP_FAIL_SCENARIO, RC_STEP_NETLIST, tmp_path)
+    assert rc == 1, f"tran fail case should exit nonzero; got rc=0:\n{out}"
+    assert "FAIL" in out and "vin_step @ 0.001 s" in out
+    assert "0 pass, 1 fail" in out
 
 
 @needs_ngspice_tmp

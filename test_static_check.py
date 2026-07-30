@@ -104,6 +104,7 @@ def test_error_count_matches_expected(checker_output):
 # ---------------------------------------------------------------------------
 
 FAIL_L1_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/fail_l1_topology.net.xml"
+FAIL_L1_VALUE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/fail_l1_value.net.xml"
 TEST_COMPONENTS_DIR = REPO_ROOT / "sim_harness/tests/fixtures/components"
 
 
@@ -127,3 +128,23 @@ def test_negative_layer1_must_connect_through_and_forbidden(tmp_path):
     # forbidden_direct_connection on HV family
     assert any("forbidden_direct_connection" in ln and "HV_INPUT" in ln
                and "HV_RAIL" in ln for ln in errors), out
+
+
+def test_negative_layer1_must_connect_through_value_out_of_range(tmp_path):
+    """FAIL_TESTBED_L1_VALUE pin 1 requires a series capacitor in
+    [1nF, 100nF] to GND; the fixture wires C1=100µF (right TYPE,
+    wrong VALUE). Locks in that the value_range check in
+    _check_must_connect_through actually fires — a silent-pass here
+    would let out-of-range decoupling / snubber caps ship."""
+    proc = subprocess.run(
+        [sys.executable, str(CHECKER), str(SCHEMATIC),
+         "--netlist", str(FAIL_L1_VALUE_NETLIST),
+         "--components-dir", str(TEST_COMPONENTS_DIR)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 1, proc.stdout
+    errors = [ln for ln in proc.stdout.splitlines() if ln.startswith("[ERROR")]
+    assert len(errors) == 1, f"expected exactly 1 value-range error:\n{proc.stdout}"
+    err = errors[0]
+    assert "must_connect_through" in err and "SLOPE_LIKE" in err
+    assert "100uF" in err and "[1e-09, 1e-07]" in err

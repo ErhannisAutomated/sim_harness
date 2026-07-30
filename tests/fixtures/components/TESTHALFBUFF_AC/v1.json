@@ -1,0 +1,26 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTHALFBUFF_AC",
+  "package": "SYNTHETIC-3",
+  "pins": [
+    { "index": 1, "name": "IN" },
+    { "index": 2, "name": "OUT" },
+    { "index": 3, "name": "GND" }
+  ],
+  "behavioral_spice_subckt": {
+    "path": "../TESTHALFBUFF/half_buff.sub",
+    "subckt_name": "TESTHALFBUFF",
+    "terminals": [
+      { "subckt_terminal": "in",  "pin_index": 1 },
+      { "subckt_terminal": "out", "pin_index": 2 },
+      { "subckt_terminal": "gnd", "pin_index": 3 }
+    ]
+  },
+  "ac_model": {
+    "topology": "op_amp_single_pole",
+    "a0_db": 100,
+    "gbw_hz": 1000000,
+    "output_z_ohm": 100,
+    "pins": { "in_plus": 1, "in_minus": 3, "output": 2 }
+  }
+}

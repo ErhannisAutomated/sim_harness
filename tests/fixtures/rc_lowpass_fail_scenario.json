@@ -1,0 +1,17 @@
+{
+  "spec_version": "0",
+  "name": "rc_lowpass_fail",
+  "description": "Negative-path fixture: RC low-pass at cutoff (-3 dB) is asserted to be 0 dB — the check MUST fail. Locks in that the Layer-4a AC evaluator actually compares expected vs. actual and returns FAIL, not silent-pass.",
+  "power_rails": {},
+  "ac_sweeps": {
+    "vin_to_vout": {
+      "source_node": "VIN",
+      "output_node": "VOUT",
+      "sweep": { "kind": "decade", "start_hz": 100, "stop_hz": 1000, "points_per_decade": 5 },
+      "expected": [
+        { "freq_hz": 159, "magnitude_db": 0.0, "tolerance_db": 0.5,
+          "rationale": "Wrong on purpose: actual is -3 dB at cutoff; asserting 0 dB must produce FAIL." }
+      ]
+    }
+  }
+}
