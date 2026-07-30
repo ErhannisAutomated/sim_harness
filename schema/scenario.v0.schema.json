@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kicad-agent.local/schemas/scenario.v0.schema.json",
+  "title": "Simulation Scenario (v0)",
+  "description": "One operating point of a schematic: declared power-rail voltages, rail-class mappings that pin down the meaning of `follows_rail` symbols from component specs, and expected node voltages the checker will verify. Consumed by sim_harness/dc_op_check.py (Layer 3a).",
+  "type": "object",
+  "required": ["spec_version", "name", "power_rails"],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {
+      "const": "0",
+      "description": "Scenario schema major version."
+    },
+    "name": {
+      "type": "string",
+      "description": "Short slug used in reports. E.g., 'full_pack_20v_usb'."
+    },
+    "description": {
+      "type": "string"
+    },
+    "power_rails": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "description": "Voltage in volts relative to GND."
+      },
+      "description": "Map of net name → voltage in volts. Each declared rail becomes an ideal SPICE voltage source in the DC deck. Includes regulated outputs the ICs are supposed to be holding (VOUT_12V, REGOUT, etc.) — the point of Layer 3a is not to solve for those but to verify the surrounding network is consistent with them."
+    },
+    "rail_class_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "description": "The schematic net name this class maps to."
+      },
+      "description": "Maps `follows_rail` symbols in component specs (e.g., 'OUTPUT', 'INPUT_SUPPLY') to the actual net names in this schematic. If unset or the class isn't found here, pins that reference the class fall back to `high_z`."
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/expected_value"
+      },
+      "description": "Node voltages the checker verifies after the DC solve. Keys are schematic net names (with the leading /sheet/ prefix as they appear in the KiCad-CLI netlist)."
+    }
+  },
+  "$defs": {
+    "expected_value": {
+      "type": "object",
+      "required": ["v"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": "number",
+          "description": "Expected node voltage in volts."
+        },
+        "tolerance_v": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.05,
+          "description": "Absolute tolerance in volts. Actual value within [v - tolerance_v, v + tolerance_v] is a PASS."
+        },
+        "rationale": { "type": "string" }
+      }
+    }
+  }
+}

@@ -28,11 +28,10 @@ EXPECTED_ERRORS = [
     # IP2326 (charger) — ISET resistor programs charge current above IC max.
     ("U1_CHARGER1 pin 11", "ISET", "R8_CHARGER1", "33k"),
     # CH224K (USB-C PD sink) — VDD directly on VBUS_RAW (abs-max 3.6V, VBUS→20V).
+    # (forbidden_direct_connection is deduped away since must_connect_through covers the same case)
     ("U1_INPUT1 pin 1", "VDD", "VBUS_RAW", "must_connect_through"),
-    ("U1_INPUT1 pin 1", "VDD", "VBUS_RAW", "forbidden_direct_connection"),
     # CH224K — VBUS-sense pin also directly on VBUS_RAW (abs-max 13.5V, VBUS→20V).
     ("U1_INPUT1 pin 8", "VBUS", "VBUS_RAW", "must_connect_through"),
-    ("U1_INPUT1 pin 8", "VBUS", "VBUS_RAW", "forbidden_direct_connection"),
 ]
 
 

@@ -69,8 +69,34 @@ Exit code is 0 iff no error-level violations.
 
 ## Current coverage
 
-Only `LM5176` (5 of 28 pins — enough to catch the three known
-`power_module_v2alt` bugs).  Full LM5176 extraction and the other
-active ICs (BQ76920, IP2326, CH224K, AON7544) are the next work
-items — planned via the multi-agent extraction pipeline described in
-the sim-harness project memo.
+- **LM5176** — 29 pins, all constrained (multi-agent extraction).
+- **BQ76920** — 20 pins (TSSOP-20 variant).
+- **IP2326** — 25 pins.
+- **CH224K** — 11 pins.
+- **AON7544** — 9 pads with G/D/S aliases on datasheet pad numbers.
+
+## Adding a new IC via the multi-agent extraction workflow
+
+The `Workflow` tool runs a fresh N-agent extractor panel + judge + adversarial
+verifier per IC.  The v0-schema-compliant JSON lands under
+`components/<MPN>/v1.json` after light post-processing.  Two prompt
+hardenings worth carrying forward on any new extraction workflow, based
+on pitfalls we hit in the LM5176 and 4-IC runs:
+
+1. **Judge output MUST NOT contain JSON-invalid ellipsis.** A judge asked
+   to summarise a long `candidate_values` array sometimes writes
+   `[1,2,3,...]` inside a JSON block.  This breaks `JSON.parse`.
+   In the judge prompt, add:
+   > CRITICAL: your output must be valid JSON. Do NOT use `...` as an
+   > ellipsis inside arrays or objects. If a `candidate_values` array
+   > would be inconveniently long, replace it with the first few entries
+   > plus a `truncated_count` sibling field.
+2. **Pin index / footprint pad mismatch is normal for MOSFETs and QFN
+   parts.** Datasheets number pads 1..N (plus "EP"); KiCad symbols
+   often use functional names ("G", "D", "S") or renumber EP to `N+1`.
+   The v0 schema supports `"index": [1, "S"]`-style alias lists — tell
+   the judge to add the schematic-native alias where obvious, otherwise
+   note the mismatch in the pin's `notes` for a post-hoc alias patch.
+
+CH224K's judge run in the 2026-07-30 batch hit pitfall (1); LM5176's
+EP and AON7544's G/D/S both hit pitfall (2).

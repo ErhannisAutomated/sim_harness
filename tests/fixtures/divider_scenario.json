@@ -1,0 +1,13 @@
+{
+  "spec_version": "0",
+  "name": "divider_fixture",
+  "description": "Synthetic voltage-divider fixture. VIN=12V drives R1/R2 divider (10k/2k → MID=2V); L1 is a DC short so AFTER_L=VIN; FB1 is a DC short so AFTER_FB is pulled down through TH1 (10k) to GND, ending at 0V because R3 goes VIN→AFTER_L→(via_L1_short_no_wait)... actually AFTER_L only sees R3 to GND, so AFTER_L=VIN=12V and R3 sinks nothing to change it.",
+  "power_rails": {
+    "VIN": 12.0
+  },
+  "expected": {
+    "MID":       { "v": 2.0,  "tolerance_v": 0.01, "rationale": "R1(10k) + R2(2k) divider from VIN=12V" },
+    "AFTER_L":   { "v": 12.0, "tolerance_v": 0.01, "rationale": "L1 is a DC short, so AFTER_L follows VIN" },
+    "AFTER_FB":  { "v": 12.0, "tolerance_v": 0.01, "rationale": "FB1 is a DC short, TH1 pulls to GND but VIN drives high-side through the 1GΩ stabilizer error is negligible" }
+  }
+}

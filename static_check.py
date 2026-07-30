@@ -139,43 +139,60 @@ class Violation:
     rule: str
     message: str
     rationale: str = ""
+    target_family: str = ""  # populated for constraints that name a to_net_family
+
+
+def _pin_index_candidates(idx_field) -> list[str]:
+    """A pin.index may be int, string, or list of int|string.
+    Returns them all as strings, in the order to try against the netlist."""
+    if isinstance(idx_field, list):
+        return [str(x) for x in idx_field]
+    return [str(idx_field)]
 
 
 def check_component(comp: Comp, spec: dict, nl: Netlist) -> list[Violation]:
     families = spec.get("net_families", {})
     violations: list[Violation] = []
     for pin in spec.get("pins", []):
-        idx = str(pin["index"])
+        candidates = _pin_index_candidates(pin["index"])
         name = pin["name"]
-        net = nl.pin_net.get((comp.ref, idx))
+        net = None
+        matched_idx = candidates[0]
+        for idx in candidates:
+            if (comp.ref, idx) in nl.pin_net:
+                net = nl.pin_net[(comp.ref, idx)]
+                matched_idx = idx
+                break
         if net is None:
             if not pin.get("may_be_unconnected"):
-                violations.append(Violation("warning", comp.ref, idx, "unconnected",
-                    f"pin {idx} ({name}) has no net in the exported netlist"))
+                tried = candidates[0] if len(candidates) == 1 else f"{candidates[0]} (tried aliases {candidates})"
+                violations.append(Violation("warning", comp.ref, candidates[0], "unconnected",
+                    f"pin {tried} ({name}) has no net in the exported netlist"))
             continue
         for c in pin.get("constraints", []):
-            violations.extend(_check_constraint(comp, pin, net, c, families, nl))
+            violations.extend(_check_constraint(comp, pin, matched_idx, net, c, families, nl))
     return violations
 
 
-def _check_constraint(comp: Comp, pin: dict, net: str, c: dict,
+def _check_constraint(comp: Comp, pin: dict, matched_idx: str, net: str, c: dict,
                       families: dict, nl: Netlist) -> list[Violation]:
     kind = c["kind"]
     if kind == "forbidden_direct_connection":
         fam = families.get(c["to_net_family"])
         if fam and net_in_family(net, fam):
-            return [Violation("error", comp.ref, str(pin["index"]),
+            return [Violation("error", comp.ref, matched_idx,
                               "forbidden_direct_connection",
                               f"{pin['name']} tied directly to net {net!r} "
                               f"(matches {c['to_net_family']} family)",
-                              c.get("rationale", ""))]
+                              c.get("rationale", ""),
+                              target_family=c["to_net_family"])]
         return []
     if kind == "must_connect_through":
-        return _check_must_connect_through(comp, pin, net, c, families, nl)
+        return _check_must_connect_through(comp, pin, matched_idx, net, c, families, nl)
     return []  # paired_with is informational at v0
 
 
-def _check_must_connect_through(comp: Comp, pin: dict, net: str, c: dict,
+def _check_must_connect_through(comp: Comp, pin: dict, matched_idx: str, net: str, c: dict,
                                  families: dict, nl: Netlist) -> list[Violation]:
     fam_name = c["to_net_family"]
     fam = families.get(fam_name)
@@ -183,21 +200,23 @@ def _check_must_connect_through(comp: Comp, pin: dict, net: str, c: dict,
         return []
     want = c["series_component"]
     val_range = c.get("value_range")
-    ref_pin = (comp.ref, str(pin["index"]))
+    ref_pin = (comp.ref, matched_idx)
     label = pin["name"]
 
     if net_in_family(net, fam):
-        return [Violation("error", comp.ref, ref_pin[1], "must_connect_through",
+        return [Violation("error", comp.ref, matched_idx, "must_connect_through",
                           f"{label} tied directly to {fam_name} (net {net!r}); "
                           f"datasheet requires a series {want} between them",
-                          c.get("rationale", ""))]
+                          c.get("rationale", ""),
+                          target_family=fam_name)]
 
     neighbours = [(r, p) for (r, p) in nl.nets.get(net, []) if (r, p) != ref_pin]
     if not neighbours:
-        return [Violation("error", comp.ref, ref_pin[1], "must_connect_through",
+        return [Violation("error", comp.ref, matched_idx, "must_connect_through",
                           f"{label} net {net!r} has no other pin on it; "
                           f"datasheet requires a series {want} to {fam_name}",
-                          c.get("rationale", ""))]
+                          c.get("rationale", ""),
+                          target_family=fam_name)]
 
     wrong_type: list[tuple[Comp, str]] = []
     for (r, p) in neighbours:
@@ -215,23 +234,26 @@ def _check_must_connect_through(comp: Comp, pin: dict, net: str, c: dict,
             if val_range and val is not None:
                 lo, hi = val_range
                 if val * 1.01 < lo or val * 0.99 > hi:
-                    return [Violation("error", comp.ref, ref_pin[1], "must_connect_through",
+                    return [Violation("error", comp.ref, matched_idx, "must_connect_through",
                                       f"{label} series {want} {nb.ref} "
                                       f"value {nb.value!r} (={val:g}) outside required "
                                       f"range [{lo:g}, {hi:g}]",
-                                      c.get("rationale", ""))]
+                                      c.get("rationale", ""),
+                                      target_family=fam_name)]
             return []
 
     if wrong_type:
         desc = ", ".join(f"{nb.ref}({nb.part_type} {nb.value})" for nb, _ in wrong_type)
-        return [Violation("error", comp.ref, ref_pin[1], "must_connect_through",
+        return [Violation("error", comp.ref, matched_idx, "must_connect_through",
                           f"{label} needs a series {want} to {fam_name}, but net "
                           f"{net!r} instead contains: {desc}",
-                          c.get("rationale", ""))]
-    return [Violation("warning", comp.ref, ref_pin[1], "must_connect_through",
+                          c.get("rationale", ""),
+                          target_family=fam_name)]
+    return [Violation("warning", comp.ref, matched_idx, "must_connect_through",
                       f"{label} needs a series {want} to {fam_name}; no path found "
                       f"from net {net!r}",
-                      c.get("rationale", ""))]
+                      c.get("rationale", ""),
+                      target_family=fam_name)]
 
 
 def main() -> int:
@@ -262,6 +284,8 @@ def main() -> int:
         matched += 1
         violations.extend(check_component(comp, spec_hit[1], nl))
 
+    violations = dedupe_direct_connection_violations(violations)
+
     for v in violations:
         print(f"[{v.severity.upper():7}] {v.ref} pin {v.pin} ({v.rule}): {v.message}")
         if v.rationale:
@@ -269,6 +293,25 @@ def main() -> int:
     print(f"\nchecked {matched} components with specs "
           f"(of {len(nl.comps)} total); {len(violations)} violations")
     return 0 if all(v.severity != "error" for v in violations) else 1
+
+
+def dedupe_direct_connection_violations(violations: list[Violation]) -> list[Violation]:
+    """Suppress redundant `forbidden_direct_connection` findings when a
+    `must_connect_through` for the same (ref, pin, target_family) already
+    flagged the same tied-directly-to-family case. The two rules are
+    semantically equivalent in this scenario; keep only the more-informative
+    must_connect_through message."""
+    mct_direct = set()
+    for v in violations:
+        if v.rule == "must_connect_through" and "tied directly to" in v.message:
+            mct_direct.add((v.ref, v.pin, v.target_family))
+    out = []
+    for v in violations:
+        if (v.rule == "forbidden_direct_connection"
+                and (v.ref, v.pin, v.target_family) in mct_direct):
+            continue
+        out.append(v)
+    return out
 
 
 if __name__ == "__main__":
