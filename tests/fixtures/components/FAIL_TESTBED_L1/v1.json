@@ -1,0 +1,41 @@
+{
+  "spec_version": "0",
+  "mpn": "FAIL_TESTBED_L1",
+  "manufacturer": "Test Fixture",
+  "package": "N/A",
+  "net_families": {
+    "GND": { "patterns": ["GND"] },
+    "HV":  { "patterns": ["HV.*"] }
+  },
+  "pins": [
+    {
+      "index": 1,
+      "name": "SLOPE_LIKE",
+      "function": "test_pin_needs_series_cap",
+      "direction": "input",
+      "voltage_range": { "min_v": -0.3, "max_v": 5.0, "reference": "GND" },
+      "constraints": [
+        {
+          "kind": "must_connect_through",
+          "series_component": "capacitor",
+          "to_net_family": "GND",
+          "rationale": "negative-path fixture: spec requires a series capacitor to GND; the fixture wires R1 (10k) between the pin and GND. Layer 1 must flag."
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "name": "HV_INPUT",
+      "function": "test_pin_forbidden_from_hv",
+      "direction": "input",
+      "voltage_range": { "min_v": -0.3, "max_v": 3.6, "reference": "GND" },
+      "constraints": [
+        {
+          "kind": "forbidden_direct_connection",
+          "to_net_family": "HV",
+          "rationale": "negative-path fixture: pin 2 is on HV_RAIL directly (fixture); Layer 1 must flag."
+        }
+      ]
+    }
+  ]
+}

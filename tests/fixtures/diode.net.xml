@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>synthetic diode fixture — 5V rail → D1 (anode) → node_MID (cathode) → R1(10k) → GND. Expected V(MID) ≈ 5 - V_F ≈ 4.35V for the generic diode model (IS=1e-14, N=1) at ~0.44mA operating current.</source></design>
+  <components>
+    <comp ref="D1"><value>D_generic</value><libsource lib="Device" part="D"/></comp>
+    <comp ref="R1"><value>10k</value><libsource lib="Device" part="R"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="D1" pin="2"/>
+    </net>
+    <net code="2" name="MID">
+      <node ref="D1" pin="1"/>
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="3" name="GND">
+      <node ref="R1" pin="2"/>
+    </net>
+  </nets>
+</export>

@@ -20,15 +20,24 @@ FIXTURE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/divider.net.xml"
 FIXTURE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/divider_scenario.json"
 NORTON_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/norton.net.xml"
 NORTON_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/norton_scenario.json"
+DIODE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/diode.net.xml"
+DIODE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/diode_scenario.json"
+MOSFET_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/mosfet_switch.net.xml"
+MOSFET_ON_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/mosfet_switch_on_scenario.json"
+MOSFET_OFF_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/mosfet_switch_off_scenario.json"
+FAIL_DC_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/fail_dc_checks.net.xml"
+FAIL_DC_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/fail_dc_checks_scenario.json"
+TEST_COMPONENTS_DIR = REPO_ROOT / "sim_harness/tests/fixtures/components"
 
 
-def _run_checker(scenario: Path, netlist: Path, work_dir: Path):
+def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
+                 components_dir: Path = COMPONENTS_DIR):
     env = os.environ.copy()
     env["TMPDIR"] = str(work_dir)
     proc = subprocess.run(
         [sys.executable, str(CHECKER), str(scenario),
          "--netlist", str(netlist),
-         "--components-dir", str(COMPONENTS_DIR),
+         "--components-dir", str(components_dir),
          "--work-dir", str(work_dir)],
         capture_output=True, text=True, env=env,
     )
@@ -81,9 +90,74 @@ def test_v2alt_full_pack_scenario_flags_fb_divider_bug(tmp_path):
     )
     rc, out, _ = _run_checker(scenario, netlist, tmp_path)
     assert rc == 1
+    # Bug #8 (FB divider): must fail, showing 1.0V vs spec's 1.2V ref
     assert "FAIL" in out and "U1_BUCKBOOST1 pin 11 (FB)" in out
-    assert "+1.0000 V" in out                       # actual, from 110k/10k
-    assert "must equal 1.2 V" in out                # spec-level check description
+    assert "+1.0000 V" in out
+    assert "must equal 1.2 V" in out
+    # Bug #3 (MODE tied to GND): flagged by dc_check must_be_in_range
+    assert "U1_BUCKBOOST1 pin 4 (MODE)" in out and "must be in [1.38, 7.6]" in out
+    # Bugs #6, #7 (CH224K VDD/VBUS-sense direct on VBUS_RAW): flagged by must_be_below
+    assert "U1_INPUT1 pin 1 (VDD)" in out and "+20.0000 V" in out
+    assert "U1_INPUT1 pin 8 (VBUS)" in out and "must be below 13.5 V" in out
+    # LM5176 EN/UVLO divider is correctly biased above threshold
+    assert "PASS" in out and "EN/UVLO" in out and "must exceed 1.22 V" in out
+
+
+@needs_ngspice_tmp
+def test_layer_3c_diode_drop(tmp_path):
+    """Diode in series with a resistor to GND: V(cathode-side) ≈ VIN - V_F.
+    Verifies ngspice's Newton solver converges with our generic diode model
+    and that our runner correctly identifies pin 2 as anode / pin 1 as cathode
+    per KiCad convention."""
+    rc, out, _ = _run_checker(DIODE_SCENARIO, DIODE_NETLIST, tmp_path)
+    assert rc == 0, f"diode fixture unexpectedly failed:\n{out}"
+    assert "PASS" in out and "MID" in out
+    # V_F comes out ≈ 0.65V at ~0.44mA for D_GENERIC
+    assert "+4.3" in out  # 4.35 ± tolerance, allow either 4.3xx or 4.4xx
+
+
+@needs_ngspice_tmp
+def test_layer_3c_mosfet_switch_on(tmp_path):
+    """N-channel MOSFET as low-side switch, gate driven above V_TH. Drain
+    must be pulled close to GND (well below VIN)."""
+    rc, out, _ = _run_checker(MOSFET_ON_SCENARIO, MOSFET_NETLIST, tmp_path)
+    assert rc == 0, f"mosfet-on fixture unexpectedly failed:\n{out}"
+    assert "PASS" in out and "DRAIN" in out
+    # Drain should be in the low mV range, definitely < 100mV
+    import re
+    m = re.search(r"DRAIN = ([+-]?\d+\.\d+) V", out)
+    assert m, out
+    v_drain = float(m.group(1))
+    assert v_drain < 0.1, f"expected drain well below VIN when FET is on; got {v_drain}"
+
+
+@needs_ngspice_tmp
+def test_layer_3c_mosfet_switch_off(tmp_path):
+    """Same fixture, gate at 0V → FET off → drain floats to VIN."""
+    rc, out, _ = _run_checker(MOSFET_OFF_SCENARIO, MOSFET_NETLIST, tmp_path)
+    assert rc == 0, f"mosfet-off fixture unexpectedly failed:\n{out}"
+    assert "PASS" in out and "DRAIN" in out
+    assert "+5.0000 V" in out
+
+
+@needs_ngspice_tmp
+def test_negative_all_dc_check_kinds_fire(tmp_path):
+    """FAIL_TESTBED_L3B has 4 dc_checks (one per kind: must_equal /
+    must_exceed / must_be_below / must_be_in_range) that are all
+    constructed to fail at 10V. Verifies each check kind emits FAIL
+    with the correct description, and that rc=1 fires."""
+    rc, out, _ = _run_checker(FAIL_DC_SCENARIO, FAIL_DC_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 1
+    fail_lines = [ln for ln in out.splitlines() if ln.startswith("[FAIL")]
+    assert len(fail_lines) == 4, f"expected 4 FAILs, got {len(fail_lines)}:\n{out}"
+    # each kind's description appears
+    assert any("must equal 5 V"        in ln for ln in fail_lines), out
+    assert any("must exceed 15 V"      in ln for ln in fail_lines), out
+    assert any("must be below 5 V"     in ln for ln in fail_lines), out
+    assert any("must be in [0, 5]"     in ln for ln in fail_lines), out
+    # rationale is echoed on failing lines
+    assert "negative-path: must_equal" in out
 
 
 @needs_ngspice_tmp

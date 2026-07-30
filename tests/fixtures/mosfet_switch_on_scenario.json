@@ -1,0 +1,16 @@
+{
+  "spec_version": "0",
+  "name": "mosfet_switch_on",
+  "description": "Low-side NMOS switch turned ON (V_GATE=3V > V_TH=1.5V). Drain should be pulled close to GND — well below VIN/2.",
+  "power_rails": {
+    "VIN":   5.0,
+    "VGATE": 3.0
+  },
+  "expected": {
+    "DRAIN": {
+      "v": 0.03,
+      "tolerance_v": 0.1,
+      "rationale": "With V_GS=3V, V_TH=1.5V, KP=100µA/V², W/L=1000, R_DS(on) ≈ 6Ω. Drain sits at VIN × R_DS(on)/(R_DS(on)+R1) = 5 × 6/10006 ≈ 3mV. Tolerance 0.1V accommodates model variability."
+    }
+  }
+}

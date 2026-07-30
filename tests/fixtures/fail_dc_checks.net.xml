@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>negative-path DC-check fixture — U1 (FAIL_TESTBED_L3B) has pin 1 on a rail held at 10V; its 4 dc_checks are all constructed to fail at 10V.</source></design>
+  <components>
+    <comp ref="U1"><value>FAIL_TESTBED_L3B</value><libsource lib="Test" part="FAIL_TESTBED_L3B"/><property name="MPN" value="FAIL_TESTBED_L3B"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="TEN_V">
+      <node ref="U1" pin="1"/>
+    </net>
+  </nets>
+</export>

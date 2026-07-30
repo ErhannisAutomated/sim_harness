@@ -1,0 +1,6 @@
+{
+  "spec_version": "0",
+  "name": "fail_dc_checks",
+  "description": "Drives TEN_V rail to 10V, verifies all 4 dc_check kinds on FAIL_TESTBED_L3B fire FAIL as constructed.",
+  "power_rails": { "TEN_V": 10.0 }
+}

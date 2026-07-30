@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>synthetic MOSFET-as-low-side-switch: VIN(5V) → R1(10k) → DRAIN → Q1 → GND. Gate driven from VGATE rail. With VGATE=3V (above V_TH=1.5V) the FET conducts and DRAIN drops well below VIN. With VGATE=0V the FET is off and DRAIN sits at VIN.</source></design>
+  <components>
+    <comp ref="Q1"><value>Q_switch</value><libsource lib="Device" part="Q_NMOS"/></comp>
+    <comp ref="R1"><value>10k</value><libsource lib="Device" part="R"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="2" name="DRAIN">
+      <node ref="R1" pin="2"/>
+      <node ref="Q1" pin="D"/>
+    </net>
+    <net code="3" name="VGATE">
+      <node ref="Q1" pin="G"/>
+    </net>
+    <net code="4" name="GND">
+      <node ref="Q1" pin="S"/>
+    </net>
+  </nets>
+</export>

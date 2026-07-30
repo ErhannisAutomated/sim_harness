@@ -1,0 +1,16 @@
+{
+  "spec_version": "0",
+  "name": "mosfet_switch_off",
+  "description": "Low-side NMOS switch OFF (V_GATE=0V < V_TH=1.5V). Drain floats up near VIN.",
+  "power_rails": {
+    "VIN":   5.0,
+    "VGATE": 0.0
+  },
+  "expected": {
+    "DRAIN": {
+      "v": 5.0,
+      "tolerance_v": 0.01,
+      "rationale": "Gate at 0V is well below V_TH so the FET is essentially off; drain sits at VIN via R1 with negligible off-state leakage."
+    }
+  }
+}

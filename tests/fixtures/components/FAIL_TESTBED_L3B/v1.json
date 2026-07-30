@@ -1,0 +1,24 @@
+{
+  "spec_version": "0",
+  "mpn": "FAIL_TESTBED_L3B",
+  "manufacturer": "Test Fixture",
+  "package": "N/A",
+  "pins": [
+    {
+      "index": 1,
+      "name": "TESTPIN",
+      "function": "test_pin",
+      "direction": "input",
+      "dc_checks": [
+        { "kind": "must_equal",       "voltage_v": 5.0, "tolerance_v": 0.1,
+          "rationale": "negative-path: must_equal — actual is 10V, expected 5V ±0.1, must FAIL" },
+        { "kind": "must_exceed",      "threshold_v": 15.0,
+          "rationale": "negative-path: must_exceed — actual 10V ≤ threshold 15V, must FAIL" },
+        { "kind": "must_be_below",    "threshold_v": 5.0,
+          "rationale": "negative-path: must_be_below — actual 10V ≥ threshold 5V, must FAIL" },
+        { "kind": "must_be_in_range", "min_v": 0.0, "max_v": 5.0,
+          "rationale": "negative-path: must_be_in_range — actual 10V outside [0,5], must FAIL" }
+      ]
+    }
+  ]
+}

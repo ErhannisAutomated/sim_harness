@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>negative-path Layer-1 topology fixture. U1 pin 1 needs a series capacitor to GND, but has a series resistor (R1) instead — must trigger must_connect_through. U1 pin 2 is on HV_RAIL directly — must trigger forbidden_direct_connection.</source></design>
+  <components>
+    <comp ref="U1"><value>FAIL_TESTBED_L1</value><libsource lib="Test" part="FAIL_TESTBED_L1"/><property name="MPN" value="FAIL_TESTBED_L1"/></comp>
+    <comp ref="R1"><value>10k</value><libsource lib="Device" part="R"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="SLOPE_NET">
+      <node ref="U1" pin="1"/>
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="2" name="HV_RAIL">
+      <node ref="U1" pin="2"/>
+    </net>
+    <net code="3" name="GND">
+      <node ref="R1" pin="2"/>
+    </net>
+  </nets>
+</export>

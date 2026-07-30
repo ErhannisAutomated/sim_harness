@@ -95,3 +95,35 @@ def test_no_unexpected_errors(checker_output):
 def test_error_count_matches_expected(checker_output):
     _, out = checker_output
     assert len(_error_lines(out)) == len(EXPECTED_ERRORS)
+
+
+# ---------------------------------------------------------------------------
+# Negative-path fixture: FAIL_TESTBED_L1 spec + synthetic netlist that is
+# constructed to violate both must_connect_through and forbidden_direct_connection.
+# Verifies the rules fire on a controlled input (not just on the real v2alt bugs).
+# ---------------------------------------------------------------------------
+
+FAIL_L1_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/fail_l1_topology.net.xml"
+TEST_COMPONENTS_DIR = REPO_ROOT / "sim_harness/tests/fixtures/components"
+
+
+def test_negative_layer1_must_connect_through_and_forbidden(tmp_path):
+    """FAIL_TESTBED_L1 pin 1 needs a series capacitor to GND but the fixture
+    wires an R (must_connect_through must fire). Pin 2 is directly on HV_RAIL
+    but the family is HV.* (forbidden_direct_connection must fire)."""
+    proc = subprocess.run(
+        [sys.executable, str(CHECKER), str(SCHEMATIC),
+         "--netlist", str(FAIL_L1_NETLIST),
+         "--components-dir", str(TEST_COMPONENTS_DIR)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    errors = [ln for ln in out.splitlines() if ln.startswith("[ERROR")]
+    assert len(errors) == 2, f"expected exactly 2 errors, got {len(errors)}:\n{out}"
+    # must_connect_through: capacitor expected, resistor R1 present
+    assert any("must_connect_through" in ln and "SLOPE_LIKE" in ln
+               and "capacitor" in ln and "R1" in ln for ln in errors), out
+    # forbidden_direct_connection on HV family
+    assert any("forbidden_direct_connection" in ln and "HV_INPUT" in ln
+               and "HV_RAIL" in ln for ln in errors), out

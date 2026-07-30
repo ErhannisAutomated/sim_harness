@@ -45,8 +45,19 @@ _RESISTIVE_PARTS = {"R", "Thermistor_NTC", "Thermistor_PTC", "Thermistor"}
 _INDUCTIVE_PARTS = {"L", "FerriteBead"}
 # Capacitors are opens (skip entirely).
 _CAPACITIVE_PARTS = {"C"}
-# Parts to skip in DC analysis (nonlinear, mechanical, or metadata).
-_SKIP_PARTS_PREFIX = ("D_", "Q_", "BH-", "USB_", "Conn_", "SW_", "LED", "Schematic_Metadata", "SRV05")
+# Two-terminal diode-like parts (pin 1 = K/cathode, pin 2 = A/anode per KiCad
+# Device library convention). D_TVS bidirectional TVS is modeled as a
+# unidirectional diode — accurate enough for DC-off analysis (leakage tiny
+# either way).
+_DIODE_PARTS = {"D", "D_TVS", "LED", "D_Schottky", "D_Zener"}
+# N-channel MOSFETs — G/D/S pin identifiers per KiCad Q_NMOS symbol.
+_NMOS_PARTS = {"Q_NMOS", "Q_NMOS_DGS", "Q_NMOS_GDS", "Q_NMOS_GSD"}
+_PMOS_PARTS = {"Q_PMOS", "Q_PMOS_DGS", "Q_PMOS_GDS", "Q_PMOS_GSD"}
+# Parts to skip in DC analysis (mechanical, metadata, multi-pin protection ICs).
+# SRV05-4 is a multi-diode ESD array — reverse-biased under normal operation,
+# so omitting doesn't perturb the DC solve; adding proper diode topology
+# per-pin is future work.
+_SKIP_PARTS_PREFIX = ("BH-", "USB_", "Conn_", "SW_", "Schematic_Metadata", "SRV05")
 
 STABILIZER_R_OHMS = 1e9      # 1 GΩ to GND on every node — floating-net safety net
 SHORT_OHMS = 1e-6            # µΩ stand-in for inductors / ferrites (avoids R=0 singularities)
@@ -80,11 +91,15 @@ def spice_ref(ref: str) -> str:
 # --------------------------------------------------------------------------
 
 def dc_kind(comp: Comp) -> str:
-    """Categorize for DC: 'resistive' | 'inductive' | 'capacitive' | 'ic' | 'skip'."""
+    """Categorize for DC: 'resistive' | 'inductive' | 'capacitive' |
+    'diode' | 'nmos' | 'pmos' | 'ic' | 'skip'."""
     p = (comp.libsource_part or "").strip()
     if p in _RESISTIVE_PARTS: return "resistive"
     if p in _INDUCTIVE_PARTS: return "inductive"
     if p in _CAPACITIVE_PARTS: return "capacitive"
+    if p in _DIODE_PARTS: return "diode"
+    if p in _NMOS_PARTS: return "nmos"
+    if p in _PMOS_PARTS: return "pmos"
     if any(p.startswith(prefix) for prefix in _SKIP_PARTS_PREFIX): return "skip"
     return "ic"
 
@@ -134,6 +149,7 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict) -> tuple[str, set
         lines.append(f"V_rail_{spice_ref(rail)} {sn} 0 DC {voltage}")
 
     # 2) walk every component, emit appropriate SPICE element(s)
+    device_kinds_used: set[str] = set()
     for comp in nl.comps.values():
         kind = dc_kind(comp)
         if kind == "capacitive" or kind == "skip":
@@ -142,11 +158,25 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict) -> tuple[str, set
             _emit_two_terminal(lines, comp, nl, "R", parse_value(comp.value) or 0.0, used_nodes)
         elif kind == "inductive":
             _emit_two_terminal(lines, comp, nl, "R", SHORT_OHMS, used_nodes)
+        elif kind == "diode":
+            if _emit_diode(lines, comp, nl, used_nodes):
+                device_kinds_used.add("diode")
+        elif kind == "nmos":
+            if _emit_mosfet(lines, comp, nl, used_nodes, "nmos"):
+                device_kinds_used.add("nmos")
+        elif kind == "pmos":
+            if _emit_mosfet(lines, comp, nl, used_nodes, "pmos"):
+                device_kinds_used.add("pmos")
         elif kind == "ic":
             spec_hit = match_spec(comp, specs)
             if spec_hit is None:
                 continue
             _emit_ic_dc_models(lines, comp, spec_hit[1], nl, rail_class_map, used_nodes)
+
+    # 2b) emit .model directives for any device kinds we used
+    lines.append("")
+    for dk in sorted(device_kinds_used):
+        lines.append(_MODEL_LIBRARY[dk])
 
     # 3) 1 GΩ stabilizer on every non-GND node (kills floating-net singularities)
     for node in sorted(used_nodes):
@@ -179,6 +209,59 @@ def _emit_two_terminal(lines: list, comp: Comp, nl: Netlist,
     a, b = spice_node(n1), spice_node(n2)
     used.add(a); used.add(b)
     lines.append(f"{spice_letter}{spice_ref(comp.ref)} {a} {b} {value:g}")
+
+
+# --------------------------------------------------------------------------
+# Layer-3c: semiconductor emission + built-in device model library
+# --------------------------------------------------------------------------
+
+# Model library. Parameters are generic-but-reasonable — chosen to give
+# canonical DC behavior (V_F ~ 0.7V for D_GENERIC, V_TH ~ 1.5V for
+# NMOS_GENERIC) with adequate numerical stability for ngspice's Newton
+# solver. Real vendor models can override per-component via a
+# `semiconductor_model` field in the spec (not implemented in v0).
+_MODEL_LIBRARY = {
+    "diode": ".model D_GENERIC D IS=1e-14 N=1 RS=0.01 BV=100",
+    "nmos":  ".model NMOS_GENERIC NMOS VTO=1.5 KP=100u LAMBDA=0.01",
+    "pmos":  ".model PMOS_GENERIC PMOS VTO=-1.5 KP=50u LAMBDA=0.01",
+}
+
+
+def _emit_diode(lines: list, comp: Comp, nl: Netlist, used: set[str]) -> bool:
+    """KiCad Device library convention: pin 1 = K (cathode), pin 2 = A (anode).
+    Returns True if emitted, False if pin lookup failed."""
+    k = nl.pin_net.get((comp.ref, "1"))
+    a = nl.pin_net.get((comp.ref, "2"))
+    if k is None or a is None:
+        print(f"warning: diode {comp.ref} has non-standard pin numbering; skipped",
+              file=sys.stderr)
+        return False
+    anode_n, cathode_n = spice_node(a), spice_node(k)
+    used.add(anode_n); used.add(cathode_n)
+    lines.append(f"D{spice_ref(comp.ref)} {anode_n} {cathode_n} D_GENERIC")
+    return True
+
+
+def _emit_mosfet(lines: list, comp: Comp, nl: Netlist,
+                  used: set[str], polarity: str) -> bool:
+    """KiCad Q_NMOS/Q_PMOS symbols expose pins by name: G / D / S. Bulk (body)
+    is not exposed at the schematic level; we tie it to source (standard for
+    discrete power FETs where body = source internally).
+    SPICE syntax: M<name> <drain> <gate> <source> <bulk> <model>."""
+    g = nl.pin_net.get((comp.ref, "G"))
+    d = nl.pin_net.get((comp.ref, "D"))
+    s = nl.pin_net.get((comp.ref, "S"))
+    if g is None or d is None or s is None:
+        print(f"warning: {polarity} MOSFET {comp.ref} missing G/D/S pin; skipped",
+              file=sys.stderr)
+        return False
+    dn, gn, sn = spice_node(d), spice_node(g), spice_node(s)
+    used.add(dn); used.add(gn); used.add(sn)
+    model = "NMOS_GENERIC" if polarity == "nmos" else "PMOS_GENERIC"
+    # L=1u W=1m → W/L=1000; with KP=100µA/V² this gives R_DS(on) ≈ 6Ω at
+    # V_GS-V_TH=1.5V — enough to behave switch-like in a DC solve.
+    lines.append(f"M{spice_ref(comp.ref)} {dn} {gn} {sn} {sn} {model} L=1u W=1m")
+    return True
 
 
 def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
@@ -354,7 +437,9 @@ def evaluate_dc_checks(nl: Netlist, specs: dict,
                 continue
             matched_idx, net = resolved
             sn = spice_node(net).lower()
-            actual = voltages.get(sn)
+            # SPICE node "0" is ground by definition; ngspice's print output
+            # omits it, so look it up as an implicit 0.0V.
+            actual = 0.0 if sn == "0" else voltages.get(sn)
             for c in checks:
                 if actual is None:
                     status = "missing"

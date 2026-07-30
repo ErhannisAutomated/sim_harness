@@ -1,0 +1,15 @@
+{
+  "spec_version": "0",
+  "name": "diode_fixture",
+  "description": "VIN=5V through D1 → MID → R1(10k) → GND. Diode is forward-biased; V(MID) sits at VIN - V_F.",
+  "power_rails": {
+    "VIN": 5.0
+  },
+  "expected": {
+    "MID": {
+      "v": 4.35,
+      "tolerance_v": 0.1,
+      "rationale": "Series diode drop. Generic D_GENERIC model (IS=1e-14, N=1) has V_F ≈ 0.65V at ~0.44mA operating current, so V(MID) = 5.0 - 0.65 ≈ 4.35V. Tolerance covers the V_F spread across the operating range."
+    }
+  }
+}
