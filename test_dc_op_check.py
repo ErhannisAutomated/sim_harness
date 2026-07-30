@@ -28,6 +28,8 @@ MOSFET_OFF_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/mosfet_switch_off_
 FAIL_DC_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/fail_dc_checks.net.xml"
 FAIL_DC_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/fail_dc_checks_scenario.json"
 TEST_COMPONENTS_DIR = REPO_ROOT / "sim_harness/tests/fixtures/components"
+RC_LP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass.net.xml"
+RC_LP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
@@ -138,6 +140,22 @@ def test_layer_3c_mosfet_switch_off(tmp_path):
     assert rc == 0, f"mosfet-off fixture unexpectedly failed:\n{out}"
     assert "PASS" in out and "DRAIN" in out
     assert "+5.0000 V" in out
+
+
+@needs_ngspice_tmp
+def test_layer_4a_rc_lowpass(tmp_path):
+    """RC low-pass fixture (R=1k, C=1µF, f_c ≈ 159 Hz). Verifies AC sweep
+    infrastructure: -3 dB at cutoff, -20 dB/decade rolloff. Checks 4
+    frequencies spanning 10 Hz to 15.9 kHz."""
+    rc, out, _ = _run_checker(RC_LP_SCENARIO, RC_LP_NETLIST, tmp_path)
+    assert rc == 0, f"AC fixture unexpectedly failed:\n{out}"
+    assert "4 pass, 0 fail, 0 missing" in out
+    # Cutoff should land within 0.5 dB of theoretical -3 dB
+    import re
+    m = re.search(r"@ 159 Hz.*VOUT: ([+-]?\d+\.\d+) dB", out)
+    assert m, f"cutoff point not found in output:\n{out}"
+    v_at_cutoff = float(m.group(1))
+    assert -3.5 <= v_at_cutoff <= -2.5, f"cutoff off: {v_at_cutoff} dB"
 
 
 @needs_ngspice_tmp

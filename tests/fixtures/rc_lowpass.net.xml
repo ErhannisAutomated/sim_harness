@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>RC low-pass fixture — R1(1k) + C1(1µF), f_c = 1/(2πRC) ≈ 159 Hz. Verifies AC-sweep infrastructure: expected -3dB at cutoff, -20dB/decade rolloff above.</source></design>
+  <components>
+    <comp ref="R1"><value>1k</value><libsource lib="Device" part="R"/></comp>
+    <comp ref="C1"><value>1uF</value><libsource lib="Device" part="C"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="R1" pin="1"/>
+    </net>
+    <net code="2" name="VOUT">
+      <node ref="R1" pin="2"/>
+      <node ref="C1" pin="1"/>
+    </net>
+    <net code="3" name="GND">
+      <node ref="C1" pin="2"/>
+    </net>
+  </nets>
+</export>

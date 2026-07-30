@@ -1,0 +1,23 @@
+{
+  "spec_version": "0",
+  "name": "rc_lowpass",
+  "description": "Sweeps VIN with 1V AC amplitude; measures V(VOUT) across a 1kΩ + 1µF RC low-pass. Expected -3dB at f_c = 1/(2π·1k·1µ) ≈ 159 Hz, -20dB/decade rolloff above.",
+  "power_rails": {},
+  "ac_sweeps": {
+    "vin_to_vout": {
+      "source_node": "VIN",
+      "output_node": "VOUT",
+      "sweep": { "kind": "decade", "start_hz": 1, "stop_hz": 1e6, "points_per_decade": 20 },
+      "expected": [
+        { "freq_hz": 10,      "magnitude_db":  -0.02, "tolerance_db": 0.5,
+          "rationale": "well below f_c: |H| ≈ 1" },
+        { "freq_hz": 159,     "magnitude_db":  -3.0,  "tolerance_db": 0.5,
+          "rationale": "cutoff frequency: |H| = 1/√2" },
+        { "freq_hz": 1590,    "magnitude_db": -20.0,  "tolerance_db": 1.0,
+          "rationale": "one decade above f_c: -20 dB" },
+        { "freq_hz": 15900,   "magnitude_db": -40.0,  "tolerance_db": 1.0,
+          "rationale": "two decades above f_c: -40 dB" }
+      ]
+    }
+  }
+}

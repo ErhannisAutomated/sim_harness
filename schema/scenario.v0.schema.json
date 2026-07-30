@@ -40,9 +40,59 @@
         "$ref": "#/$defs/expected_value"
       },
       "description": "Node voltages the checker verifies after the DC solve. Keys are schematic net names (with the leading /sheet/ prefix as they appear in the KiCad-CLI netlist)."
+    },
+    "ac_sweeps": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/ac_sweep" },
+      "description": "Layer-4a small-signal frequency sweeps. Each entry runs ngspice's .ac analysis with a 1V AC source at source_node, layered on top of the DC operating point (source_node's DC bias comes from its power_rails entry if declared, otherwise 0V). The checker parses complex node voltages at the expected frequencies and verifies magnitude (in dB) matches. Use for passive filter cutoff verification, decoupling network resonance checks, EMI filter response. NOT sufficient for regulator loop stability — that needs Layer 4b small-signal switcher models (deferred)."
     }
   },
   "$defs": {
+    "ac_sweep": {
+      "type": "object",
+      "required": ["source_node", "sweep"],
+      "additionalProperties": false,
+      "properties": {
+        "source_node": {
+          "type": "string",
+          "description": "Schematic net name where the 1V AC signal is injected. May be a power rail (in which case the same voltage source provides DC bias + AC), or a signal-only node (DC bias = 0V, AC = 1V)."
+        },
+        "sweep": {
+          "type": "object",
+          "required": ["kind", "start_hz", "stop_hz"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["decade", "octave", "linear"] },
+            "start_hz": { "type": "number", "exclusiveMinimum": 0 },
+            "stop_hz":  { "type": "number", "exclusiveMinimum": 0 },
+            "points_per_decade": { "type": "integer", "minimum": 1, "default": 10 },
+            "n_points": { "type": "integer", "minimum": 2,
+              "description": "Only used when kind is 'linear'." }
+          }
+        },
+        "expected": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ac_expected_point" },
+          "description": "List of (frequency, magnitude_db, tolerance_db) checks. Optionally include an `output_node` per-point; defaults to the sweep-level output_node."
+        },
+        "output_node": {
+          "type": "string",
+          "description": "Default node whose magnitude is measured for each expected point. Individual expected points may override with their own output_node."
+        }
+      }
+    },
+    "ac_expected_point": {
+      "type": "object",
+      "required": ["freq_hz", "magnitude_db"],
+      "additionalProperties": false,
+      "properties": {
+        "freq_hz": { "type": "number", "exclusiveMinimum": 0 },
+        "magnitude_db": { "type": "number" },
+        "tolerance_db": { "type": "number", "minimum": 0, "default": 1 },
+        "output_node": { "type": "string" },
+        "rationale": { "type": "string" }
+      }
+    },
     "expected_value": {
       "type": "object",
       "required": ["v"],
