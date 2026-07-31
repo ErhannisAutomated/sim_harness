@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>Layer-4b stability fixture: TESTOP1 as unity-gain buffer, OUT loaded lightly by C_LOAD=100pF. With Rout=100Ω, this puts the parasitic pole f_p2 = 1/(2π·100·100p) ≈ 15.9 MHz — well above GBW=1MHz, so PM stays near 90°.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTOP1</value><libsource lib="Test" part="TESTOP1"/></comp>
+    <comp ref="C1"><value>100p</value><libsource lib="Device" part="C"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="U1" pin="IN+"/>
+    </net>
+    <net code="2" name="VOUT">
+      <node ref="U1" pin="IN-"/>
+      <node ref="U1" pin="OUT"/>
+      <node ref="C1" pin="1"/>
+    </net>
+    <net code="3" name="GND">
+      <node ref="C1" pin="2"/>
+    </net>
+  </nets>
+</export>

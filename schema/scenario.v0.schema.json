@@ -50,6 +50,11 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/tran_sweep" },
       "description": "Layer-5a transient time-domain sweeps. Each entry runs ngspice's .tran analysis with an optional step_source (PWL from before_v to after_v at at_time_s) replacing that node's DC rail. The checker samples the time-domain output at named times and verifies voltage matches. Use for RC/RLC step response, inrush current profiles, soft-start ramp verification. Later 5b/c/d (PWM stimulus, XSPICE code models, vendor SPICE, libngspice FFI) deferred."
+    },
+    "loop_stability": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/loop_stability_case" },
+      "description": "Layer-4b closed-loop small-signal stability analyses. Each entry breaks a feedback loop at the named component pin, injects a 1V AC test source, runs a frequency sweep, and extracts the loop-gain transfer function T(f) = -V(original_side)/V(injected_side). Reports crossover frequency, phase margin (180° + phase(T) at |T|=1), and gain margin (-|T|_dB at phase(T)=-180°). Use for op-amp compensation verification, regulator loop tuning, filter stability with amplification. v0 supports voltage-injection Middlebrook only; current injection / Tian's method deferred."
     }
   },
   "$defs": {
@@ -156,6 +161,62 @@
         "tolerance_v": { "type": "number", "minimum": 0, "default": 0.05 },
         "output_node": { "type": "string" },
         "rationale":   { "type": "string" }
+      }
+    },
+    "loop_stability_case": {
+      "type": "object",
+      "required": ["break_at", "sweep"],
+      "additionalProperties": false,
+      "properties": {
+        "break_at": {
+          "type": "object",
+          "required": ["ref", "pin"],
+          "additionalProperties": false,
+          "description": "Component pin to break the loop at. CONVENTION: name the FEEDBACK SENSE pin (op-amp IN-, regulator FB, comparator inverting input) — NOT the driver output. Breaking at the driver would disconnect its load impedance from the driver, which erases the very effects (cap-load poles, load-line resonance) we're trying to measure. Breaking at the sense pin leaves the driver + all its loads on the original net; only the ONE high-impedance sense pin moves to the fresh injection-side net. The runner then emits `V_loop_inj <original> <injected> AC 1 DC 0` between the two.",
+          "properties": {
+            "ref": { "type": "string" },
+            "pin": {
+              "oneOf": [ { "type": "integer" }, { "type": "string" } ]
+            }
+          }
+        },
+        "injection": {
+          "enum": ["middlebrook_voltage"],
+          "default": "middlebrook_voltage",
+          "description": "Loop-injection method. v0 supports voltage-only Middlebrook; Tian's method (voltage + current combined) and pure current injection deferred."
+        },
+        "sweep": {
+          "type": "object",
+          "required": ["kind", "start_hz", "stop_hz"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["decade", "octave", "linear"] },
+            "start_hz": { "type": "number", "exclusiveMinimum": 0 },
+            "stop_hz":  { "type": "number", "exclusiveMinimum": 0 },
+            "points_per_decade": { "type": "integer", "minimum": 1, "default": 20 },
+            "n_points": { "type": "integer", "minimum": 2 }
+          },
+          "description": "Frequency sweep for the loop-gain measurement. Choose start/stop to bracket the expected crossover by at least a decade on each side; use ≥20 points/decade for accurate margin extraction (interpolation error grows fast near the crossover)."
+        },
+        "expected": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Stability metrics to verify. Each metric supports {min, max} bounds (either optional). If the metric can't be computed (e.g., loop gain never crosses 0 dB → no crossover_hz; phase never reaches -180° → gm_db is +∞ and passes any min check), status is 'missing' unless expected omits the metric entirely.",
+          "properties": {
+            "crossover_hz":     { "$ref": "#/$defs/loop_metric_bound" },
+            "phase_margin_deg": { "$ref": "#/$defs/loop_metric_bound" },
+            "gain_margin_db":   { "$ref": "#/$defs/loop_metric_bound" }
+          }
+        }
+      }
+    },
+    "loop_metric_bound": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "rationale": { "type": "string" }
       }
     },
     "expected_value": {

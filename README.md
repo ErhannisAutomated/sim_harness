@@ -1,13 +1,15 @@
 # sim_harness — PCB design-verification harness
 
 Layered checks that validate a schematic against machine-readable
-component specs. As of 2026-07-30, six layers shipped:
+component specs. As of 2026-07-31, seven layers shipped:
 
 - **Layer 1** — static per-pin topology rules (`static_check.py`)
 - **Layer 3a** — DC operating-point solve of the linear network (`dc_op_check.py`)
 - **Layer 3b** — per-pin `dc_check` assertions from component specs
 - **Layer 3c** — semiconductor DC via ngspice built-in device models (diodes, MOSFETs)
 - **Layer 4a** — small-signal AC sweep with magnitude/dB expectations
+- **Layer 4b** — closed-loop stability via Middlebrook voltage injection
+  (crossover frequency, phase margin, gain margin)
 - **Layer 5a** — transient sim with PWL step stimulus and time-point expectations
 
 Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
@@ -18,9 +20,18 @@ Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
   `.subckt` file. `.include`d verbatim; terminals wired in declaration order.
 
 Deferred: Layer 2 (topology comparator against vendor reference designs),
-Layer 4b (loop-injection + margin extraction — builds on the ac_model
-substrate above), Layer 5b/c/d (PWM stimulus, XSPICE code models in Rust,
-libngspice FFI).
+Layer 5b/c/d (PWM stimulus, XSPICE code models in Rust, libngspice FFI).
+
+## Layer 4b: loop-stability convention
+
+`loop_stability.<name>.break_at` names a component pin — but **name the
+FEEDBACK SENSE pin (op-amp IN-, regulator FB), NOT the driver output**.
+Breaking at the driver disconnects its load impedance from the driver,
+which erases the very effects (cap-load poles, resonance) we're trying
+to measure. Breaking at the sense pin keeps the driver + all its loads
+on the original net; only the ONE high-impedance sense pin moves to the
+fresh injection-side net. See the docstring on `_run_loop_stability`
+and the fixture at `tests/fixtures/op_amp_buffer_*`.
 
 ## Motivation
 

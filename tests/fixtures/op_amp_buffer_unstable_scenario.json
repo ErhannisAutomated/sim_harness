@@ -1,0 +1,16 @@
+{
+  "spec_version": "0",
+  "name": "op_amp_buffer_unstable",
+  "description": "Unity-gain buffer with heavy (100 nF) capacitive load. Same op-amp, same feedback — but the parasitic pole from Rout·Cload sits ~2 decades below GBW, dragging phase past -180° well before crossover. PM must come in dangerously low (< 30°) and GM must go below a healthy threshold. Loop broken at U1/IN- (sense pin) so the op-amp still drives its cap-loaded output. This scenario locks in that Layer 4b actually DETECTS the classic cap-load stability failure.",
+  "power_rails": { "VIN": 0.0 },
+  "loop_stability": {
+    "buffer_loop": {
+      "break_at": { "ref": "U1", "pin": "IN-" },
+      "sweep": { "kind": "decade", "start_hz": 1, "stop_hz": 1e8, "points_per_decade": 20 },
+      "expected": {
+        "phase_margin_deg": { "min": 45,
+          "rationale": "A healthy design wants PM ≥ 45°. This fixture is intentionally BAD — expected to fail with PM well below that. If this check ever PASSES, either the ac_model math is wrong or the cap value doesn't create the parasitic pole it should." }
+      }
+    }
+  }
+}

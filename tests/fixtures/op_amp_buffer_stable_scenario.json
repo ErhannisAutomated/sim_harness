@@ -1,0 +1,18 @@
+{
+  "spec_version": "0",
+  "name": "op_amp_buffer_stable",
+  "description": "Unity-gain buffer with light (100 pF) capacitive load. Loop broken at U1/IN- (the sense pin — keeps the op-amp driving VOUT with its full load). Expect crossover near GBW=1 MHz with PM near 90° (dominant pole from A(f), parasitic pole at ~16 MHz from Rout·C_load contributes little). Phase never reaches -180° in the sweep range, so GM is omitted from expected.",
+  "power_rails": { "VIN": 0.0 },
+  "loop_stability": {
+    "buffer_loop": {
+      "break_at": { "ref": "U1", "pin": "IN-" },
+      "sweep": { "kind": "decade", "start_hz": 1, "stop_hz": 1e8, "points_per_decade": 20 },
+      "expected": {
+        "crossover_hz":     { "min": 5e5, "max": 2e6,
+          "rationale": "Unity-gain feedback → loop gain = A(f); crossover = GBW = 1 MHz. Allow 0.5-2× for numerical margin." },
+        "phase_margin_deg": { "min": 60,
+          "rationale": "Single dominant pole → -90° asymptote → PM ≈ 90°. The 100pF parasitic pole is at ~16 MHz, so its contribution at 1 MHz is minor. Require PM ≥ 60° (healthy)." }
+      }
+    }
+  }
+}

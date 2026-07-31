@@ -43,6 +43,10 @@ HALFBUFF_PRECEDENCE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/half_buff_
 DIVIDER_MISSING_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/divider_missing_scenario.json"
 RC_LP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_lowpass_fail_scenario.json"
 RC_STEP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/rc_step_fail_scenario.json"
+OPAMP_BUF_STABLE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_stable.net.xml"
+OPAMP_BUF_STABLE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_stable_scenario.json"
+OPAMP_BUF_UNSTABLE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_unstable.net.xml"
+OPAMP_BUF_UNSTABLE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_unstable_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
@@ -324,6 +328,50 @@ def test_negative_tran_wrong_voltage_fails(tmp_path):
     assert rc == 1, f"tran fail case should exit nonzero; got rc=0:\n{out}"
     assert "FAIL" in out and "vin_step @ 0.001 s" in out
     assert "0 pass, 1 fail" in out
+
+
+@needs_ngspice_tmp
+def test_layer_4b_stable_buffer_healthy_margin(tmp_path):
+    """Unity-gain buffer with light (100 pF) cap load. Loop broken at
+    U1/IN- (sense pin). Middlebrook voltage injection sweeps 1 Hz to
+    100 MHz. Expect crossover ≈ GBW (1 MHz) and PM close to 90° (single-
+    pole-dominant behavior). Verifies the entire Layer-4b pipeline —
+    loop-break rewrite, V_loop_inj emission, T(f) extraction, margin
+    interpolation — end-to-end."""
+    rc, out, _ = _run_checker(OPAMP_BUF_STABLE_SCENARIO, OPAMP_BUF_STABLE_NETLIST,
+                              tmp_path, components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"stable-buffer loop test unexpectedly failed:\n{out}"
+    assert "2 pass, 0 fail, 0 missing" in out
+    # Crossover should land near GBW = 1 MHz
+    import re
+    m = re.search(r"crossover_hz: \+([\d.e+]+) Hz", out)
+    assert m, f"crossover not extracted:\n{out}"
+    fc = float(m.group(1))
+    assert 5e5 <= fc <= 2e6, f"crossover out of expected range: {fc} Hz"
+    # PM should be close to 90° for a dominant-pole system
+    m = re.search(r"phase_margin_deg: \+([\d.]+)", out)
+    assert m, f"PM not extracted:\n{out}"
+    pm = float(m.group(1))
+    assert 80 <= pm <= 95, f"PM off for single-pole: {pm}°"
+
+
+@needs_ngspice_tmp
+def test_layer_4b_cap_loaded_buffer_flags_instability(tmp_path):
+    """Same op-amp + unity-gain feedback, but with a heavy (100 nF) cap
+    load. The parasitic pole from Rout·C_load lands ~2 decades below
+    GBW, pushing phase toward -180° at crossover → PM well below 45°.
+    Expected: PM check FAILS (fixture designed to be unstable). This is
+    the negative-path test that proves Layer 4b actually catches the
+    cap-load stability failure mode."""
+    rc, out, _ = _run_checker(OPAMP_BUF_UNSTABLE_SCENARIO, OPAMP_BUF_UNSTABLE_NETLIST,
+                              tmp_path, components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 1, f"cap-loaded buffer should have FAIL'd PM check; rc=0:\n{out}"
+    assert "FAIL" in out and "phase_margin_deg" in out
+    import re
+    m = re.search(r"phase_margin_deg: \+([\d.]+)", out)
+    assert m, f"PM not extracted:\n{out}"
+    pm = float(m.group(1))
+    assert pm < 30, f"expected severely degraded PM (<30°); got {pm}°"
 
 
 @needs_ngspice_tmp

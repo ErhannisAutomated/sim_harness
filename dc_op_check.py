@@ -30,11 +30,12 @@ from static_check import load_netlist, load_specs                       # noqa: 
 from spice import (                                                     # noqa: E402
     build_spice_deck, run_ngspice,
     parse_node_voltages, parse_ac_output, parse_tran_output,
-    spice_node, output_nodes_for_sweep,
+    spice_node, spice_ref, output_nodes_for_sweep,
 )
 from checks import (                                                    # noqa: E402
-    AcResult, Result, CheckResult, TranResult,
-    compare_expected, evaluate_dc_checks, evaluate_ac_sweep, evaluate_tran_sweep,
+    AcResult, LoopStabilityResult, Result, CheckResult, TranResult,
+    compare_expected, evaluate_dc_checks, evaluate_ac_sweep,
+    evaluate_loop_stability, evaluate_tran_sweep,
     format_results,
 )
 
@@ -72,6 +73,19 @@ def _print_ac_results(ac_results: list[AcResult]):
             print(f"          rationale: {r.rationale}")
 
 
+def _print_loop_results(loop_results: list[LoopStabilityResult]):
+    print("--- scenario `loop_stability` ---")
+    unit = {"crossover_hz": "Hz", "phase_margin_deg": "°", "gain_margin_db": "dB"}
+    for r in loop_results:
+        tag = {"pass": "PASS   ", "fail": "FAIL   ", "missing": "MISSING"}[r.status]
+        u = unit.get(r.metric, "")
+        actual = f"{r.actual:+.4g} {u}" if r.actual is not None else "(no data)"
+        print(f"[{tag}] {r.loop_name} · {r.metric}: {actual} "
+              f"(expected {r.expected_desc} {u})")
+        if r.status in ("fail", "missing") and r.rationale:
+            print(f"          rationale: {r.rationale}")
+
+
 def _print_tran_results(tran_results: list[TranResult]):
     print("--- scenario `tran_sweeps` ---")
     for r in tran_results:
@@ -81,6 +95,54 @@ def _print_tran_results(tran_results: list[TranResult]):
               f"{actual} (expected {r.expected_v:+.4f} ±{r.tolerance_v})")
         if r.status == "fail" and r.rationale:
             print(f"          rationale: {r.rationale}")
+
+
+def _run_loop_stability(loop_name: str, loop_cfg: dict, nl, specs: dict,
+                         scenario: dict, work_dir: Path
+                         ) -> list[LoopStabilityResult]:
+    """Break the loop at the specified pin, run one AC sweep with Middlebrook
+    voltage injection, extract PM/GM/crossover, compare to expected bounds.
+
+    Mutates nl.pin_net for the duration of this run (redirects the break_at
+    pin's net binding to a fresh injected-side net). try/finally restores
+    even if ngspice raises."""
+    br = loop_cfg["break_at"]
+    ref = br["ref"]
+    pin = str(br["pin"])
+    key = (ref, pin)
+    original_net = nl.pin_net.get(key)
+    if original_net is None:
+        return [LoopStabilityResult(loop_name, "crossover_hz", "any", None,
+                                     "missing",
+                                     f"break_at pin {ref}/{pin} not found in netlist")]
+    injected_net = f"LOOP_INJ__{ref}__{pin}"
+    original_node = spice_node(original_net).lower()
+    injected_node = spice_node(injected_net).lower()
+
+    prev_mapping = nl.pin_net[key]
+    nl.pin_net[key] = injected_net
+    try:
+        deck_text, _ = build_spice_deck(
+            nl, specs, scenario,
+            ac_sweep={"sweep": loop_cfg["sweep"],
+                       "source_node": original_net},   # unused w/ loop_break
+            ac_output_nodes=[original_node, injected_node],
+            loop_break={
+                "tag": spice_ref(f"{ref}_{pin}"),
+                "original_node": original_node,
+                "injected_node": injected_node,
+            },
+        )
+        deck_path = work_dir / f"{scenario['name']}_loop_{loop_name}.cir"
+        deck_path.write_text(deck_text)
+        output = run_ngspice(deck_path, work_dir)
+        samples = parse_ac_output(output,
+                                    expected_nodes=[original_node, injected_node])
+        v_orig = samples.get(original_node, [])
+        v_inj = samples.get(injected_node, [])
+        return evaluate_loop_stability(loop_name, loop_cfg, v_orig, v_inj)
+    finally:
+        nl.pin_net[key] = prev_mapping
 
 
 def main() -> int:
@@ -135,6 +197,14 @@ def main() -> int:
         samples = parse_ac_output(ac_output, expected_nodes=out_nodes)
         ac_results.extend(evaluate_ac_sweep(sweep_name, sweep, samples))
 
+    # Loop-stability sweeps — one ngspice run per loop, with a temporary
+    # pin_net rewrite to break the loop at the specified pin. try/finally
+    # guarantees the mutation is undone even if ngspice fails.
+    loop_results: list[LoopStabilityResult] = []
+    for loop_name, loop_cfg in scenario.get("loop_stability", {}).items():
+        loop_results.extend(_run_loop_stability(
+            loop_name, loop_cfg, nl, specs, scenario, args.work_dir))
+
     # Transient sweeps — one ngspice run per sweep
     tran_results: list[TranResult] = []
     for sweep_name, sweep in scenario.get("tran_sweeps", {}).items():
@@ -156,12 +226,15 @@ def main() -> int:
         _print_dc_check_results(check_results)
     if ac_results:
         _print_ac_results(ac_results)
+    if loop_results:
+        _print_loop_results(loop_results)
     if tran_results:
         _print_tran_results(tran_results)
 
     all_status = ([r.status for r in results]
                   + [r.status for r in check_results]
                   + [r.status for r in ac_results]
+                  + [r.status for r in loop_results]
                   + [r.status for r in tran_results])
     n_pass = sum(1 for s in all_status if s == "pass")
     n_fail = sum(1 for s in all_status if s == "fail")
@@ -172,6 +245,7 @@ def main() -> int:
     if not args.keep_deck and all(s == "pass" for s in all_status):
         cleanup = ([deck_path]
                    + list(args.work_dir.glob(f"{scenario['name']}_ac_*.cir"))
+                   + list(args.work_dir.glob(f"{scenario['name']}_loop_*.cir"))
                    + list(args.work_dir.glob(f"{scenario['name']}_tran_*.cir")))
         for p in cleanup:
             if p.exists():

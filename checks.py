@@ -207,6 +207,166 @@ def evaluate_ac_sweep(sweep_name: str, sweep: dict,
 
 
 # ---------------------------------------------------------------------------
+# Scenario `loop_stability` (Layer 4b)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LoopStabilityResult:
+    loop_name: str
+    metric: str          # 'crossover_hz' / 'phase_margin_deg' / 'gain_margin_db'
+    expected_desc: str   # 'in [X, Y]' / 'min X' / etc — for printing
+    actual: Optional[float]
+    status: str          # 'pass' | 'fail' | 'missing'
+    rationale: str = ""
+
+
+def _log_interp(x_lo: float, x_hi: float, y_lo: float, y_hi: float,
+                 x_target: float) -> float:
+    """Linear interpolation in log-x space (leaves y linear)."""
+    if x_lo == x_hi:
+        return y_lo
+    frac = (math.log(x_target) - math.log(x_lo)) / (math.log(x_hi) - math.log(x_lo))
+    return y_lo + frac * (y_hi - y_lo)
+
+
+def _find_zero_crossing_freq(ts: list[tuple[float, float]]
+                              ) -> Optional[float]:
+    """Given [(freq_hz, y), ...] sorted by freq, find the freq where y crosses
+    zero (linearly interpolating in log-freq). Returns None if no crossing.
+    Uses the FIRST zero crossing (loop gain typically drops monotonically)."""
+    for i in range(len(ts) - 1):
+        (f0, y0), (f1, y1) = ts[i], ts[i + 1]
+        if y0 == 0:
+            return f0
+        if (y0 > 0) != (y1 > 0):
+            # crosses between i and i+1
+            frac = -y0 / (y1 - y0)
+            return math.exp(math.log(f0) + frac * (math.log(f1) - math.log(f0)))
+    return None
+
+
+def _unwrapped_phase_deg(samples: list[tuple[float, complex]]
+                          ) -> list[tuple[float, float]]:
+    """Phase in degrees, monotonic (jumps > 180° unwrapped by adding ±360°).
+    Returns [(freq, phase_deg), ...]."""
+    out: list[tuple[float, float]] = []
+    prev: Optional[float] = None
+    for f, T in samples:
+        p = math.degrees(math.atan2(T.imag, T.real))
+        if prev is not None:
+            while p - prev > 180:  p -= 360
+            while p - prev < -180: p += 360
+        out.append((f, p))
+        prev = p
+    return out
+
+
+def evaluate_loop_stability(loop_name: str, loop_cfg: dict,
+                             v_original: list[tuple[float, complex]],
+                             v_injected: list[tuple[float, complex]]
+                             ) -> list[LoopStabilityResult]:
+    """Compute loop gain T(f) = -V(orig)/V(inj), extract crossover/PM/GM,
+    compare to expected bounds.
+
+    Both sample lists are assumed to share the same frequency grid (they
+    come from the same ngspice AC run). Any frequency where |V(inj)| ≈ 0
+    (numerical noise) is skipped."""
+    # Zip by index (ngspice AC output is deterministic in freq order)
+    if len(v_original) != len(v_injected):
+        return [LoopStabilityResult(loop_name, "crossover_hz", "any", None,
+                                     "missing", "AC output row counts differ")]
+    # Middlebrook voltage loop-gain: T = -V(upstream)/V(downstream).
+    # Convention: `break_at` names the FEEDBACK SENSE pin (op-amp IN-,
+    # regulator FB, comparator IN). That way the driver stays connected
+    # to its loads (loads' impedance shapes the response — critical for
+    # cap-load stability). Signal flows driver → V_inj → sense; V_inj's
+    # upstream is `original_node` (still carries the driver + loads);
+    # downstream is `injected_node` (isolated on the sense pin).
+    # → T = -V(original)/V(injected).
+    T_samples: list[tuple[float, complex]] = []
+    for (f_o, V_o), (f_i, V_i) in zip(v_original, v_injected):
+        if abs(V_i) < 1e-30:
+            continue
+        T_samples.append((f_o, -V_o / V_i))
+    if not T_samples:
+        return [LoopStabilityResult(loop_name, "crossover_hz", "any", None,
+                                     "missing", "loop gain samples empty")]
+
+    mag_db = [(f, 20 * math.log10(abs(T))) for f, T in T_samples if abs(T) > 0]
+    phase = _unwrapped_phase_deg(T_samples)
+
+    # Crossover: first freq where mag crosses 0 dB
+    crossover_hz = _find_zero_crossing_freq(mag_db)
+
+    # Phase margin: 180° + phase(T at crossover)
+    pm_deg: Optional[float] = None
+    if crossover_hz is not None:
+        # Interpolate phase at crossover
+        for i in range(len(phase) - 1):
+            f0, p0 = phase[i]
+            f1, p1 = phase[i + 1]
+            if f0 <= crossover_hz <= f1:
+                p_at_cx = _log_interp(f0, f1, p0, p1, crossover_hz)
+                pm_deg = 180.0 + p_at_cx
+                break
+
+    # Gain margin: -|T|_dB at freq where phase(T) = -180°
+    # (search unwrapped phase for -180° crossing)
+    gm_db: Optional[float] = None
+    phase_offset = [(f, p + 180) for f, p in phase]
+    f_180 = _find_zero_crossing_freq(phase_offset)
+    if f_180 is not None:
+        for i in range(len(mag_db) - 1):
+            f0, m0 = mag_db[i]
+            f1, m1 = mag_db[i + 1]
+            if f0 <= f_180 <= f1:
+                m_at_180 = _log_interp(f0, f1, m0, m1, f_180)
+                gm_db = -m_at_180
+                break
+
+    expected = loop_cfg.get("expected", {})
+    results: list[LoopStabilityResult] = []
+    for metric_name, actual in (
+        ("crossover_hz", crossover_hz),
+        ("phase_margin_deg", pm_deg),
+        ("gain_margin_db", gm_db),
+    ):
+        bound = expected.get(metric_name)
+        if bound is None:
+            continue
+        desc = _describe_bound(bound)
+        rationale = bound.get("rationale", "")
+        if actual is None:
+            results.append(LoopStabilityResult(
+                loop_name, metric_name, desc, None, "missing", rationale))
+            continue
+        status = "pass" if _bound_passes(bound, actual) else "fail"
+        results.append(LoopStabilityResult(
+            loop_name, metric_name, desc, actual, status, rationale))
+    return results
+
+
+def _describe_bound(bound: dict) -> str:
+    lo, hi = bound.get("min"), bound.get("max")
+    if lo is not None and hi is not None:
+        return f"in [{lo:g}, {hi:g}]"
+    if lo is not None:
+        return f"≥ {lo:g}"
+    if hi is not None:
+        return f"≤ {hi:g}"
+    return "any"
+
+
+def _bound_passes(bound: dict, actual: float) -> bool:
+    lo, hi = bound.get("min"), bound.get("max")
+    if lo is not None and actual < lo:
+        return False
+    if hi is not None and actual > hi:
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Scenario `tran_sweeps` (Layer 5a)
 # ---------------------------------------------------------------------------
 
