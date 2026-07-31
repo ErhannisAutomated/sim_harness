@@ -1,0 +1,17 @@
+{
+  "spec_version": "0",
+  "name": "ss_ramp_fail",
+  "description": "Negative-path fixture: the SS ramp reaches 1.2V at 2.4ms, but scenario asserts 3.0V at that time. Must FAIL. Locks in that the tran evaluator + transient_model emission produce a value that the scenario evaluator actually diffs against expected.",
+  "requires_capabilities": ["l5c_soft_start_timing"],
+  "power_rails": {},
+  "tran_sweeps": {
+    "ss_charge": {
+      "sweep": { "step_s": 1e-5, "stop_s": 3e-3 },
+      "output_node": "SS",
+      "expected": [
+        { "time_s": 2.4e-3, "voltage_v": 3.0, "tolerance_v": 0.05,
+          "rationale": "Wrong on purpose: SS clamps at 1.2V (not 3.0V). If this PASSES, either the clamp isn't being applied or the assertion isn't being compared to the sim." }
+      ]
+    }
+  }
+}

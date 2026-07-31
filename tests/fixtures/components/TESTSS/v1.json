@@ -1,0 +1,19 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTSS",
+  "package": "SYNTHETIC-1",
+  "pins": [
+    {
+      "index": "SS", "name": "SS", "direction": "output",
+      "transient_model": {
+        "topology": "current_source_with_clamp",
+        "current_a": 5e-6,
+        "direction": "out_of_pin",
+        "clamp_v": 1.2
+      }
+    }
+  ],
+  "modeling": {
+    "capabilities": ["l5c_soft_start_timing"]
+  }
+}

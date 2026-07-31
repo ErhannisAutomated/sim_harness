@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>Layer-5c voltage_gated_by_input fixture: TESTPGOOD's PG pin asserts 3.3V when VIN &gt; 4.0V (else 0V), with a stable_for_s=50µs low-pass filter delay. Scenario ramps VIN from 0 to 5V and watches PG.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTPGOOD</value><libsource lib="Test" part="TESTPGOOD"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="VIN">
+      <node ref="U1" pin="VIN"/>
+    </net>
+    <net code="2" name="PG">
+      <node ref="U1" pin="PG"/>
+    </net>
+  </nets>
+</export>

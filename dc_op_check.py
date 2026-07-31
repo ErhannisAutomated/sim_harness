@@ -26,7 +26,7 @@ from pathlib import Path
 # Make sibling modules importable without installing the package.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from static_check import load_netlist, load_specs                       # noqa: E402
+from static_check import load_netlist, load_specs, match_spec           # noqa: E402
 from spice import (                                                     # noqa: E402
     build_spice_deck, run_ngspice,
     parse_node_voltages, parse_ac_output, parse_tran_output,
@@ -49,6 +49,40 @@ def load_scenario(path: Path) -> dict:
     scenario = json.loads(path.read_text())
     jsonschema.Draft202012Validator(schema).validate(scenario)
     return scenario
+
+
+def _collect_spec_capabilities(nl, specs: dict) -> set[str]:
+    """Union of all capability tags claimed by specs matched to netlist components.
+    Handles both bare-string and {tag, disposition} forms."""
+    out: set[str] = set()
+    for comp in nl.comps.values():
+        hit = match_spec(comp, specs)
+        if hit is None:
+            continue
+        caps = hit[1].get("modeling", {}).get("capabilities", []) or []
+        for c in caps:
+            tag = c if isinstance(c, str) else c.get("tag")
+            if tag:
+                out.add(tag)
+    return out
+
+
+def _preflight_check_capabilities(nl, specs: dict, scenario: dict):
+    """Warn (not fail) when the scenario names capabilities no matched spec claims.
+    Silent when the scenario doesn't declare `requires_capabilities`."""
+    required = set(scenario.get("requires_capabilities", []) or [])
+    if not required:
+        return
+    claimed = _collect_spec_capabilities(nl, specs)
+    missing = sorted(required - claimed)
+    if missing:
+        print("--- capability pre-flight ---", file=sys.stderr)
+        print(f"warning: scenario requires capabilities not claimed by any matched spec: "
+              f"{missing}", file=sys.stderr)
+        print(f"         claimed by matched specs: {sorted(claimed) or '(none)'}",
+              file=sys.stderr)
+        print(f"         scenario assertions may fail; check the specs' modeling.capabilities blocks.",
+              file=sys.stderr)
 
 
 def _print_dc_check_results(check_results: list[CheckResult]):
@@ -174,6 +208,8 @@ def main() -> int:
     nl = load_netlist(xml_path)
     specs = load_specs(args.components_dir)
     scenario = load_scenario(args.scenario)
+
+    _preflight_check_capabilities(nl, specs, scenario)
 
     # DC op-point pass
     deck_text, _ = build_spice_deck(nl, specs, scenario)

@@ -1,7 +1,7 @@
 # sim_harness — PCB design-verification harness
 
 Layered checks that validate a schematic against machine-readable
-component specs. As of 2026-07-31, seven layers shipped:
+component specs. As of 2026-07-31, eight layers shipped:
 
 - **Layer 1** — static per-pin topology rules (`static_check.py`)
 - **Layer 3a** — DC operating-point solve of the linear network (`dc_op_check.py`)
@@ -11,6 +11,8 @@ component specs. As of 2026-07-31, seven layers shipped:
 - **Layer 4b** — closed-loop stability via Middlebrook voltage injection
   (crossover frequency, phase margin, gain margin)
 - **Layer 5a** — transient sim with PWL step stimulus and time-point expectations
+- **Layer 5c** — per-pin `transient_model` topologies for state-machine-flavored
+  IC behavior (soft-start ramps, boot delays, gated outputs)
 
 Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
 - Spec-level `ac_model` — parametric linear IC model (currently
@@ -21,6 +23,39 @@ Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
 
 Deferred: Layer 2 (topology comparator against vendor reference designs),
 Layer 5b/c/d (PWM stimulus, XSPICE code models in Rust, libngspice FFI).
+
+## Layer 5c: transient_model topologies
+
+Per-pin `transient_model` at spec level captures time-domain behavior the
+datasheet promises (SS ramp, POR delay, PGOOD gating). Three topologies:
+
+- **`current_source_with_clamp`** — sources fixed current into pin until
+  V(pin) reaches clamp_v, then holds. Emitted as B-source with `u()`
+  clamp. Runner adds `uic` to the `.tran` directive when any
+  transient_model is present, so caps start at 0V rather than at their
+  post-ramp DC steady state.
+- **`voltage_after_delay`** — pin holds at `before_v` until time
+  `delay_s`, then transitions to `after_v`. Emitted as PWL.
+- **`voltage_gated_by_input`** — pin follows `high_v`/`low_v` based on
+  whether V(other_pin) exceeds `threshold_v`. Optional `stable_for_s`
+  adds a first-order filter (G+R+C) on the sense side to model
+  "input must be stable for N µs" delay.
+
+`transient_model` is orthogonal to `dc_model` / `ac_model`: emitted only
+during `.tran` runs, suppresses the pin's `dc_model` for that run only.
+
+## Modeling metadata
+
+Spec-level `modeling.capabilities` (positive assertions of what the spec
+verifies) and `modeling.simplifications` (documented deviations from
+datasheet fidelity). Scenarios can declare `requires_capabilities: [...]`;
+runner does a pre-flight check and warns (not fails) on gaps. Bare-string
+tags default to `{tag, disposition: "claimed"}`; promote to
+`{tag, disposition: "verified" | "failing", note}` when appropriate.
+
+`provenance` block (optional) records extractor runs, datasheet SHA-256,
+and per-field consensus from multi-agent extraction. NOT a confidence
+score — records what was done, not what it means.
 
 ## Layer 4b: loop-stability convention
 

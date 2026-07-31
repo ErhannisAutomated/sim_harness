@@ -1,0 +1,20 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTPOR",
+  "package": "SYNTHETIC-1",
+  "pins": [
+    {
+      "index": "READY", "name": "READY", "direction": "output",
+      "transient_model": {
+        "topology": "voltage_after_delay",
+        "before_v": 0.0,
+        "after_v": 3.3,
+        "delay_s": 100e-6,
+        "rise_time_s": 1e-9
+      }
+    }
+  ],
+  "modeling": {
+    "capabilities": ["l5c_por_ready_delay"]
+  }
+}

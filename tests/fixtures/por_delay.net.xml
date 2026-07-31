@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>Layer-5c voltage_after_delay fixture: TESTPOR's READY pin holds at 0V until t=100µs, then transitions to 3.3V. External R_pullup is not needed — the transient_model IS the driver.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTPOR</value><libsource lib="Test" part="TESTPOR"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="READY">
+      <node ref="U1" pin="READY"/>
+    </net>
+  </nets>
+</export>

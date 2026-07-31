@@ -55,6 +55,11 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/loop_stability_case" },
       "description": "Layer-4b closed-loop small-signal stability analyses. Each entry breaks a feedback loop at the named component pin, injects a 1V AC test source, runs a frequency sweep, and extracts the loop-gain transfer function T(f) = -V(original_side)/V(injected_side). Reports crossover frequency, phase margin (180° + phase(T) at |T|=1), and gain margin (-|T|_dB at phase(T)=-180°). Use for op-amp compensation verification, regulator loop tuning, filter stability with amplification. v0 supports voltage-injection Middlebrook only; current injection / Tian's method deferred."
+    },
+    "requires_capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capabilities this scenario expects the matched component specs to jointly claim. Runner does a pre-flight check: for each capability in this list, verifies that at least one matched IC's `modeling.capabilities` includes it. Missing capabilities produce a warning (not a hard error at v0) so scenarios can still run — the scenario's own assertions will fail naturally if the model can't actually verify what's needed. Use capability tags from the component spec schema's `capability_tag` enum."
     }
   },
   "$defs": {

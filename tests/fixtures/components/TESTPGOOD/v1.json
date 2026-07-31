@@ -1,0 +1,22 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTPGOOD",
+  "package": "SYNTHETIC-2",
+  "pins": [
+    { "index": "VIN", "name": "VIN", "direction": "power_in" },
+    {
+      "index": "PG", "name": "PG", "direction": "output",
+      "transient_model": {
+        "topology": "voltage_gated_by_input",
+        "sense_pin": "VIN",
+        "threshold_v": 4.0,
+        "low_v": 0.0,
+        "high_v": 3.3,
+        "stable_for_s": 50e-6
+      }
+    }
+  ],
+  "modeling": {
+    "capabilities": ["l5c_pgood_generation"]
+  }
+}

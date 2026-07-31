@@ -1,0 +1,20 @@
+{
+  "spec_version": "0",
+  "name": "por_delay",
+  "description": "Boot-delay verification: TESTPOR's READY pin holds at 0V until 100µs, then asserts 3.3V. Layer-5c voltage_after_delay topology.",
+  "power_rails": {},
+  "tran_sweeps": {
+    "boot": {
+      "sweep": { "step_s": 1e-6, "stop_s": 300e-6 },
+      "output_node": "READY",
+      "expected": [
+        { "time_s": 0,      "voltage_v": 0.0, "tolerance_v": 0.05,
+          "rationale": "Before delay: pin holds at before_v=0V." },
+        { "time_s": 50e-6,  "voltage_v": 0.0, "tolerance_v": 0.05,
+          "rationale": "Halfway through the boot window, still asserting 0V." },
+        { "time_s": 200e-6, "voltage_v": 3.3, "tolerance_v": 0.05,
+          "rationale": "Well past delay (100µs), pin has transitioned to after_v=3.3V." }
+      ]
+    }
+  }
+}

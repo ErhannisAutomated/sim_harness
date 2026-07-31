@@ -1,0 +1,23 @@
+{
+  "spec_version": "0",
+  "name": "ss_ramp",
+  "description": "Soft-start ramp verification. TESTSS pushes 5µA into C1=10nF; V(SS) ramps linearly at 500 V/s and clamps at 1.2V after 2.4ms. Layer-5c transient_model of kind current_source_with_clamp; the u(time) gate ensures the source is inactive at DC op-point so the cap starts uncharged.",
+  "requires_capabilities": ["l5c_soft_start_timing"],
+  "power_rails": {},
+  "tran_sweeps": {
+    "ss_charge": {
+      "sweep": { "step_s": 1e-5, "stop_s": 5e-3 },
+      "output_node": "SS",
+      "expected": [
+        { "time_s": 0,      "voltage_v": 0.0,  "tolerance_v": 0.05,
+          "rationale": "u(time) gate keeps source inactive at DC op-point; cap uncharged." },
+        { "time_s": 1.2e-3, "voltage_v": 0.6,  "tolerance_v": 0.05,
+          "rationale": "Halfway through ramp: V = (5µA / 10nF) · 1.2ms = 0.6V." },
+        { "time_s": 2.4e-3, "voltage_v": 1.2,  "tolerance_v": 0.05,
+          "rationale": "Just reaching clamp: V = I·t/C = 5µA·2.4ms/10nF = 1.2V. Source cuts off." },
+        { "time_s": 4.5e-3, "voltage_v": 1.2,  "tolerance_v": 0.05,
+          "rationale": "Well into clamp region: cap holds at 1.2V since source is off." }
+      ]
+    }
+  }
+}

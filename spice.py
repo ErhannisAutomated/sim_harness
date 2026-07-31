@@ -215,6 +215,117 @@ def _emit_ic_dc_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
 
 
 # ---------------------------------------------------------------------------
+# Layer-5c: pin-level transient_model emission
+# ---------------------------------------------------------------------------
+
+def _emit_transient_model(lines: list, comp: Comp, spec: dict, pin: dict,
+                           matched_idx: str, node: str, nl: Netlist,
+                           used: set[str]) -> bool:
+    """Emit ngspice element(s) for a single pin's `transient_model`.
+
+    Returns True on success. All topologies emit as B-elements (behavioral
+    sources); some also emit RC networks for filtering. Only invoked when
+    the runner is building a .tran deck (transient_model is time-domain-
+    only; for .op and .ac the dc_model / ac_model paths apply)."""
+    tm = pin["transient_model"]
+    topo = tm["topology"]
+    tag = f"{spice_ref(comp.ref)}_{spice_ref(matched_idx)}"
+
+    if topo == "current_source_with_clamp":
+        # I = current_a * u(clamp_v - V(pin))
+        # Runner sets `uic` on the tran directive when transient_models are
+        # present — starts cap at 0V, source drives cap toward clamp, then
+        # u() drops to 0 once clamp is reached. Without uic, ngspice's DC
+        # op-point would find V(pin)=clamp_v as the steady state (source
+        # off) and tran would start there, missing the ramp entirely.
+        clamp = tm["clamp_v"]
+        current = tm["current_a"]
+        if tm["direction"] == "out_of_pin":
+            lines.append(f"B_tm_{tag} 0 {node} I = "
+                          f"{current:g} * u({clamp:g} - V({node}))")
+        else:
+            lines.append(f"B_tm_{tag} {node} 0 I = "
+                          f"{current:g} * u(V({node}) - {clamp:g})")
+        return True
+
+    if topo == "voltage_after_delay":
+        before = tm["before_v"]
+        after = tm["after_v"]
+        delay = tm["delay_s"]
+        rise = tm.get("rise_time_s", 1e-9)
+        t0 = max(0.0, delay - rise / 2)
+        t1 = delay + rise / 2
+        lines.append(f"V_tm_{tag} {node} 0 PWL("
+                      f"0 {before:g} "
+                      f"{t0:g} {before:g} "
+                      f"{t1:g} {after:g})")
+        return True
+
+    if topo == "voltage_gated_by_input":
+        sense_ref = tm["sense_pin"]
+        # Resolve sense pin on same component
+        sense_pin = _find_pin_by_index_ref(spec, sense_ref)
+        if sense_pin is None:
+            print(f"warning: {comp.ref} transient_model sense_pin {sense_ref!r} "
+                  f"not found in spec; skipping", file=sys.stderr)
+            return False
+        idx_field = sense_pin["index"]
+        candidates = idx_field if isinstance(idx_field, list) else [idx_field]
+        resolved = pin_net_lookup(comp.ref, [str(c) for c in candidates], nl)
+        if resolved is None:
+            print(f"warning: {comp.ref} transient_model sense_pin {sense_ref!r} "
+                  f"unresolved in netlist; skipping", file=sys.stderr)
+            return False
+        sense_node = spice_node(resolved[1])
+        used.add(sense_node)
+
+        threshold = tm["threshold_v"]
+        low = tm["low_v"]
+        high = tm["high_v"]
+        stable = tm.get("stable_for_s", 0.0)
+        if stable > 0:
+            # Low-pass sense voltage through a G+R+C: τ = R*C = 1·stable_for_s
+            filt = f"n_tm_filt_{tag}"
+            used.add(filt)
+            lines.append(f"G_tm_{tag} 0 {filt} {sense_node} 0 1")
+            lines.append(f"R_tm_{tag} {filt} 0 1")
+            lines.append(f"C_tm_{tag} {filt} 0 {stable:g}")
+            probe = filt
+        else:
+            probe = sense_node
+        # V = low + (high-low) * u(V(probe) - threshold)
+        lines.append(f"B_tm_{tag} {node} 0 V = "
+                      f"{low:g} + ({high:g} - {low:g}) * u(V({probe}) - {threshold:g})")
+        return True
+
+    print(f"warning: unknown transient_model topology {topo!r} on {comp.ref} pin {matched_idx}",
+          file=sys.stderr)
+    return False
+
+
+def _emit_ic_transient_models(lines: list, comp: Comp, spec: dict, nl: Netlist,
+                                used: set[str]) -> set[str]:
+    """Walk the IC's pins; for each with a transient_model, emit its SPICE
+    contribution. Returns the set of matched_idx values that were covered
+    (so per-pin dc_model on those pins can be suppressed for this run)."""
+    covered: set[str] = set()
+    for pin in spec.get("pins", []):
+        tm = pin.get("transient_model")
+        if tm is None:
+            continue
+        idx_candidates = pin["index"] if isinstance(pin["index"], list) else [pin["index"]]
+        resolved = pin_net_lookup(comp.ref, [str(c) for c in idx_candidates], nl)
+        if resolved is None:
+            continue
+        matched_idx, net = resolved
+        node = spice_node(net)
+        used.add(node)
+        if _emit_transient_model(lines, comp, spec, pin, matched_idx, node, nl, used):
+            covered.add(matched_idx)
+    return covered
+
+
+# ---------------------------------------------------------------------------
 # Behavioral IC models: ac_model (parametric) + behavioral_spice_subckt (vendor)
 # ---------------------------------------------------------------------------
 
@@ -429,6 +540,9 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
     subckt_defs: list[str] = []       # .subckt blocks from ac_model
     behavioral_x_lines: list[str] = []  # X-instances for ac_model / subckt
     include_paths: set[str] = set()   # deduped .include targets
+    needs_uic = False   # set if any transient_model was emitted — forces
+                        # `tran ... uic` so clamp-based sources don't get
+                        # collapsed to their steady state by DC op-point
     for comp in nl.comps.values():
         kind = dc_kind(comp)
         if kind == "skip":
@@ -460,7 +574,9 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
             if spec_hit is None:
                 continue
             spec_path, spec = spec_hit
-            # Precedence: behavioral_spice_subckt > ac_model > per-pin dc_model
+            # Precedence: behavioral_spice_subckt > ac_model > per-pin dc_model.
+            # transient_model is orthogonal — active only in .tran runs; it
+            # suppresses the pin's dc_model but not its ac_model participation.
             owned: set[str] = set()
             subckt_ref = spec.get("behavioral_spice_subckt")
             ac_model = spec.get("ac_model")
@@ -475,6 +591,12 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
                                       spec, ac_model, nl, used_nodes)
                 if cov:
                     owned = cov
+            if tran_sweep is not None:
+                tran_covered = _emit_ic_transient_models(lines, comp, spec, nl,
+                                                          used_nodes)
+                if tran_covered:
+                    needs_uic = True
+                owned = owned | tran_covered
             _emit_ic_dc_models(lines, comp, spec, nl, rail_class_map,
                                 used_nodes, skip_pin_indices=owned)
 
@@ -526,11 +648,16 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
             lines.append(f"print v({out_node})")
     elif tran_sweep is not None:
         sw = tran_sweep["sweep"]
-        # ngspice tran syntax: `tran <tstep> <tstop> [tstart]`
+        # ngspice tran syntax: `tran <tstep> <tstop> [tstart] [uic]`.
+        # `uic` skips the DC op-point and starts from initial conditions;
+        # required when any transient_model with clamp behavior is present
+        # (its DC steady state is post-ramp, not pre-ramp — without uic
+        # ngspice would report V(pin)=clamp_v from t=0).
+        uic_tag = " uic" if needs_uic else ""
         if sw.get("start_s", 0) > 0:
-            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g} {sw['start_s']:g}")
+            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g} {sw['start_s']:g}{uic_tag}")
         else:
-            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g}")
+            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g}{uic_tag}")
         for out_node in (tran_output_nodes or []):
             lines.append(f"print v({out_node})")
     else:

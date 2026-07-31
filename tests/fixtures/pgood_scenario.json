@@ -1,0 +1,21 @@
+{
+  "spec_version": "0",
+  "name": "pgood",
+  "description": "PGOOD assertion with stable_for_s=50µs filter. VIN steps from 0V to 5V at t=100µs. PG should stay LOW while VIN is below threshold, transition HIGH some time after VIN crosses 4V (the filter adds ~50µs of lag). Layer-5c voltage_gated_by_input topology.",
+  "power_rails": { "VIN": 5.0 },
+  "tran_sweeps": {
+    "vin_ramp_up": {
+      "step_source": { "node": "VIN", "before_v": 0.0, "after_v": 5.0, "at_time_s": 100e-6, "rise_time_s": 1e-6 },
+      "sweep": { "step_s": 5e-6, "stop_s": 500e-6 },
+      "output_node": "PG",
+      "expected": [
+        { "time_s": 0,       "voltage_v": 0.0, "tolerance_v": 0.1,
+          "rationale": "VIN=0V initially → far below 4V threshold → PG LOW." },
+        { "time_s": 50e-6,   "voltage_v": 0.0, "tolerance_v": 0.1,
+          "rationale": "Still before VIN step → PG LOW." },
+        { "time_s": 400e-6,  "voltage_v": 3.3, "tolerance_v": 0.3,
+          "rationale": "VIN stepped up at 100µs; after ~50µs filter delay the LP output crosses 4V and PG asserts. By 400µs (3-4 time-constants later) PG has fully asserted." }
+      ]
+    }
+  }
+}

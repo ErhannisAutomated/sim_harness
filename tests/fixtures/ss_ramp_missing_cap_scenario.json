@@ -1,0 +1,17 @@
+{
+  "spec_version": "0",
+  "name": "ss_ramp_missing_cap",
+  "description": "Negative pre-flight fixture: same SS ramp behavior but scenario requires a capability (l4b_loop_stability) that TESTSS does not claim. Runner should print a warning about the missing capability but proceed to run. The tran itself still passes — the pre-flight check is informational, not a hard gate.",
+  "requires_capabilities": ["l4b_loop_stability"],
+  "power_rails": {},
+  "tran_sweeps": {
+    "ss_charge": {
+      "sweep": { "step_s": 1e-5, "stop_s": 5e-3 },
+      "output_node": "SS",
+      "expected": [
+        { "time_s": 4.5e-3, "voltage_v": 1.2, "tolerance_v": 0.05,
+          "rationale": "Cap clamped at 1.2V despite the missing-capability warning." }
+      ]
+    }
+  }
+}

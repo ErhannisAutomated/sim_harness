@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design><source>Layer-5c current_source_with_clamp fixture: TESTSS sources 5µA out of its SS pin into an external C_SS=10nF to GND. Ramp rate dV/dt = I/C = 5µA/10nF = 500 V/s. Time to reach clamp (1.2V) = 2.4ms. After that, source cuts off and V(SS) holds at 1.2V.</source></design>
+  <components>
+    <comp ref="U1"><value>TESTSS</value><libsource lib="Test" part="TESTSS"/></comp>
+    <comp ref="C1"><value>10n</value><libsource lib="Device" part="C"/></comp>
+  </components>
+  <nets>
+    <net code="1" name="SS">
+      <node ref="U1" pin="SS"/>
+      <node ref="C1" pin="1"/>
+    </net>
+    <net code="2" name="GND">
+      <node ref="C1" pin="2"/>
+    </net>
+  </nets>
+</export>

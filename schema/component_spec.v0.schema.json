@@ -61,6 +61,14 @@
     "behavioral_spice_subckt": {
       "$ref": "#/$defs/behavioral_spice_subckt",
       "description": "Path to an external SPICE .subckt (e.g. a vendor-published behavioral model). When present, the runner `.include`s the file and instantiates the named subckt with terminals in the given order. Overrides `ac_model` and per-pin `dc_model` for the mapped pins."
+    },
+    "modeling": {
+      "$ref": "#/$defs/modeling",
+      "description": "Meta-information about what THIS spec models and how faithfully. Purely informational for the runner today, but consumed by capability-suitability checks: a scenario can declare `requires_capabilities: [...]` and the runner refuses to run against a spec that doesn't claim them all. Optional; omit entirely for specs that don't want to make claims (they just don't get the pre-flight suitability check)."
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance",
+      "description": "Audit trail of how this spec was created — extractor runs, datasheet revision hashes, per-field consensus from the multi-agent pipeline. Optional. NOT a confidence score — records what was done, not what it means."
     }
   },
   "$defs": {
@@ -124,6 +132,10 @@
           "type": "array",
           "items": { "$ref": "#/$defs/dc_check" },
           "description": "Layer-3b assertions on the pin's DC voltage. Evaluated after the operating-point solve. Each check compares the pin's solved node voltage against a datasheet-known threshold or expected value; a failure indicates the surrounding design has a wrong divider, wrong reference, missing enable network, etc. Move IC-specific knowledge from scenario `expected` blocks into these — one project-independent check, reused across every scenario that uses this IC."
+        },
+        "transient_model": {
+          "$ref": "#/$defs/transient_model",
+          "description": "Layer-5c time-domain behavior of this pin. Used by `.tran` runs; ignored by DC (`dc_model` covers that) and AC (`ac_model` covers that). Emitted as an ngspice B-element (behavioral source) with the topology's expression. When present, suppresses per-pin `dc_model` emission during transient runs (the transient_model IS authoritative for time-domain behavior)."
         },
         "notes": {
           "type": "string",
@@ -382,6 +394,187 @@
               "pin_index": { "$ref": "#/$defs/pin_index_ref" }
             }
           }
+        }
+      }
+    },
+    "transient_model": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["topology", "current_a", "direction", "clamp_v"],
+          "description": "Fixed current source into the pin until pin voltage reaches `clamp_v`, then holds. The canonical soft-start ramp: with an external cap C to ground, pin voltage ramps linearly at dV/dt = current_a/C until reaching clamp_v. Emitted as B-element: `I = current_a * (V(pin) < clamp_v ? 1 : 0)` (or the mirror for into_pin direction).",
+          "properties": {
+            "topology": { "const": "current_source_with_clamp" },
+            "current_a": {
+              "type": "number", "exclusiveMinimum": 0,
+              "description": "Magnitude of the source current. Positive; use `direction` for sign."
+            },
+            "direction": {
+              "enum": ["out_of_pin", "into_pin"],
+              "description": "`out_of_pin` = current flows from pin into external cap (charges cap toward positive rail). `into_pin` = current flows into pin (discharges cap toward negative rail)."
+            },
+            "clamp_v": {
+              "type": "number",
+              "description": "Voltage at which the internal current source cuts off. Typically the chip's reference voltage (V_REF for soft-start feedback pins)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["topology", "before_v", "after_v", "delay_s"],
+          "description": "Pin holds at `before_v` until time `delay_s` after t=0, then transitions to `after_v` with the given rise time. The canonical POR / boot-delay behavior. Emitted as a PWL voltage source. NOTE: `delay_s` is relative to simulation t=0, not to any external trigger — for trigger-based delays, use a different topology once we add one.",
+          "properties": {
+            "topology": { "const": "voltage_after_delay" },
+            "before_v": { "type": "number" },
+            "after_v": { "type": "number" },
+            "delay_s": { "type": "number", "minimum": 0 },
+            "rise_time_s": {
+              "type": "number", "exclusiveMinimum": 0, "default": 1e-9,
+              "description": "Transition duration. Default 1 ns for a near-ideal edge."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["topology", "sense_pin", "threshold_v", "low_v", "high_v"],
+          "description": "Pin output is `high_v` when V(sense_pin) exceeds `threshold_v`, else `low_v`. The canonical PGOOD-style output. Optional `stable_for_s` adds a first-order filter delay before the output can rise, modeling the 'input must be stable for N µs before PGOOD asserts' behavior common on power-sequencing ICs. Emitted as B-element voltage source.",
+          "properties": {
+            "topology": { "const": "voltage_gated_by_input" },
+            "sense_pin": {
+              "$ref": "#/$defs/pin_index_ref",
+              "description": "The pin whose voltage is compared to threshold_v. Must resolve to a pin_index (int or symbolic name) on this same component."
+            },
+            "threshold_v": { "type": "number" },
+            "low_v": { "type": "number" },
+            "high_v": { "type": "number" },
+            "stable_for_s": {
+              "type": "number", "minimum": 0, "default": 0,
+              "description": "First-order filter time constant on the output. 0 = ideal instantaneous response; positive values delay assertion by ~this many seconds. Use to model PGOOD's 'input must be stable' delay."
+            }
+          }
+        }
+      ]
+    },
+    "modeling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "$ref": "#/$defs/capability_tag" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["tag"],
+                "properties": {
+                  "tag": { "$ref": "#/$defs/capability_tag" },
+                  "disposition": {
+                    "enum": ["claimed", "verified", "failing"],
+                    "default": "claimed",
+                    "description": "`claimed` = extractor asserted, no cross-check. `verified` = human or automated check confirmed spec matches datasheet. `failing` = known-wrong pending fix (paired with a note)."
+                  },
+                  "note": { "type": "string" }
+                }
+              }
+            ]
+          },
+          "description": "Positive assertions about what this spec models. A scenario can require a subset of capabilities via its `requires_capabilities` field; runner does a pre-flight suitability check. Silence on a capability doesn't mean 'not modeled' — it means 'unclaimed'. Add tags only for what the spec actually contributes. Each item may be a bare string (defaults to `disposition: claimed`) or an object with disposition + note."
+        },
+        "simplifications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scope", "target", "kind", "note"],
+            "properties": {
+              "scope": {
+                "enum": ["component", "pin", "capability", "net_family"],
+                "description": "What this simplification is attached to. `component` = whole-IC-level. `pin` = specific pin. `capability` = the named capability tag. `net_family` = a named net class on this IC."
+              },
+              "target": {
+                "description": "The pin index, capability tag, net-family name, or component MPN this simplification refers to. Use empty string for scope=component (implicit).",
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "integer" }
+                ]
+              },
+              "kind": {
+                "enum": ["stubbed", "idealized", "approximated", "best_guess", "omitted"],
+                "description": "`stubbed` = tied off to a placeholder (e.g. AGND merged into GND). `idealized` = ignores second-order effects (e.g. clamp is sharp not smooth). `approximated` = uses a simpler formula than the datasheet specifies. `best_guess` = datasheet vague, extractor made a plausible choice. `omitted` = deliberate non-modeling of a known-real behavior."
+              },
+              "note": {
+                "type": "string",
+                "description": "Explain what was simplified and why. Should be specific enough that a downstream user can decide whether it blocks their use case."
+              }
+            }
+          },
+          "description": "Documented deviations from full datasheet fidelity. Sparse by design — only entries where someone actually decided something worth recording. Silence on a subject means 'unspecified', not 'faithful'."
+        }
+      }
+    },
+    "capability_tag": {
+      "enum": [
+        "l1_topology",
+        "l3a_dc_bias",
+        "l3b_pin_thresholds",
+        "l4a_ac_response",
+        "l4b_loop_stability",
+        "l5a_transient_step_response",
+        "l5c_soft_start_timing",
+        "l5c_por_ready_delay",
+        "l5c_pgood_generation",
+        "l5c_pgood_gating",
+        "l5c_mode_latch_at_startup",
+        "vendor_macromodel"
+      ],
+      "description": "Enum of capabilities the harness knows how to check. Grows as new layers and topologies ship. Naming: `l<layer><suffix>_<bug-class>`. Adding a new tag is additive; old specs stay valid."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extractor_runs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "date": { "type": "string", "description": "ISO 8601 date." },
+              "extractors": { "type": "integer", "minimum": 1,
+                "description": "Number of independent extractor agents in this run." },
+              "extractor_model": { "type": "string" },
+              "judge_model": { "type": "string" },
+              "verifier_model": { "type": "string" },
+              "datasheet_sha256": { "type": "string",
+                "description": "Hash of the PDF the extraction was run against — if the PDF changes, extraction is stale." },
+              "elapsed_minutes": { "type": "number", "minimum": 0 },
+              "note": { "type": "string" }
+            }
+          },
+          "description": "Chronological log of extraction attempts. Newest last."
+        },
+        "field_consensus": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["extractor_consensus"],
+            "properties": {
+              "extractor_consensus": {
+                "enum": ["unanimous", "arbitrated", "disputed"],
+                "description": "`unanimous` = all extractors agreed. `arbitrated` = judge picked from disagreeing extractors. `disputed` = judge couldn't confidently pick; best guess recorded."
+              },
+              "agreed_count":     { "type": "integer", "minimum": 1 },
+              "total_extractors": { "type": "integer", "minimum": 1 },
+              "note": { "type": "string" }
+            }
+          },
+          "description": "Per-field/per-pin consensus from the most recent multi-agent extraction. Keys are JSON pointers (e.g. `pins/3/dc_model`) or free-form dotted paths. Enum is primary axis; raw counts kept alongside for meta-analysis."
         }
       }
     },

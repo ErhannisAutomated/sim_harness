@@ -47,6 +47,14 @@ OPAMP_BUF_STABLE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer
 OPAMP_BUF_STABLE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_stable_scenario.json"
 OPAMP_BUF_UNSTABLE_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_unstable.net.xml"
 OPAMP_BUF_UNSTABLE_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/op_amp_buffer_unstable_scenario.json"
+SS_RAMP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp.net.xml"
+SS_RAMP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_scenario.json"
+SS_RAMP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_fail_scenario.json"
+SS_RAMP_MISSING_CAP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_missing_cap_scenario.json"
+POR_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/por_delay.net.xml"
+POR_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/por_delay_scenario.json"
+PGOOD_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/pgood.net.xml"
+PGOOD_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/pgood_scenario.json"
 
 
 def _run_checker(scenario: Path, netlist: Path, work_dir: Path,
@@ -372,6 +380,70 @@ def test_layer_4b_cap_loaded_buffer_flags_instability(tmp_path):
     assert m, f"PM not extracted:\n{out}"
     pm = float(m.group(1))
     assert pm < 30, f"expected severely degraded PM (<30°); got {pm}°"
+
+
+@needs_ngspice_tmp
+def test_layer_5c_soft_start_ramp(tmp_path):
+    """Current-source-with-clamp topology: 5µA into 10nF cap → linear ramp
+    at 500 V/s, clamps at 1.2V after 2.4ms. Exercises transient_model
+    emission + uic-forced initial condition + B-source u() clamp."""
+    rc, out, _ = _run_checker(SS_RAMP_SCENARIO, SS_RAMP_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"SS ramp fixture failed:\n{out}"
+    assert "4 pass, 0 fail, 0 missing" in out
+    # Halfway sample should land near 0.6V (500 V/s × 1.2ms)
+    import re
+    m = re.search(r"@ 0\.0012 s.*SS: \+([\d.]+) V", out)
+    assert m, out
+    v_mid = float(m.group(1))
+    assert 0.55 <= v_mid <= 0.65, f"midpoint voltage off: {v_mid}V"
+
+
+@needs_ngspice_tmp
+def test_layer_5c_por_delay(tmp_path):
+    """Voltage-after-delay topology: READY pin holds 0V until 100µs, then
+    transitions to 3.3V. Emitted as PWL — exercises the simplest topology."""
+    rc, out, _ = _run_checker(POR_SCENARIO, POR_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"POR fixture failed:\n{out}"
+    assert "3 pass, 0 fail, 0 missing" in out
+
+
+@needs_ngspice_tmp
+def test_layer_5c_pgood_generation(tmp_path):
+    """Voltage-gated-by-input topology with 50µs stable-for filter. VIN
+    steps from 0 to 5V at t=100µs; PG asserts ~50µs later once the LP-
+    filtered sense exceeds 4V threshold. Exercises cross-pin voltage
+    reference + RC filter emission."""
+    rc, out, _ = _run_checker(PGOOD_SCENARIO, PGOOD_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"PGOOD fixture failed:\n{out}"
+    assert "3 pass, 0 fail, 0 missing" in out
+
+
+@needs_ngspice_tmp
+def test_negative_layer_5c_wrong_voltage_fails(tmp_path):
+    """SS ramp clamps at 1.2V; scenario asserts 3.0V at t=2.4ms. Must
+    FAIL. Locks in that transient_model output is actually compared to
+    scenario expectations."""
+    rc, out, _ = _run_checker(SS_RAMP_FAIL_SCENARIO, SS_RAMP_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 1, f"expected failure; got rc=0:\n{out}"
+    assert "FAIL" in out and "0 pass, 1 fail" in out
+
+
+@needs_ngspice_tmp
+def test_negative_layer_5c_missing_capability_warns(tmp_path):
+    """Scenario requires `l4b_loop_stability` which TESTSS does not
+    claim. Runner should print a warning about the missing capability
+    but the tran itself still passes (pre-flight is informational, not
+    a hard gate at v0)."""
+    rc, out, err = _run_checker(SS_RAMP_MISSING_CAP_SCENARIO, SS_RAMP_NETLIST,
+                                tmp_path, components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"tran should still pass despite missing capability; got rc={rc}:\n{out}\n{err}"
+    assert "capability pre-flight" in err
+    assert "l4b_loop_stability" in err
+    assert "1 pass, 0 fail, 0 missing" in out
 
 
 @needs_ngspice_tmp
