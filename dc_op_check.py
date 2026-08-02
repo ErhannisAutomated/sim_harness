@@ -11,9 +11,10 @@ node voltages, and/or AC sweeps) + the component-spec directory, this:
      component specs, and per-sweep `expected` (magnitude in dB).
   5. Reports pass/fail. Exit code 0 iff every check passed.
 
-Splits: spice.py (deck generation + ngspice invocation + raw parsers);
-checks.py (evaluators + result classes); static_check.py (netlist +
-spec loading, plus Layer 1 topology checker).
+Splits: spice.py (deck generation + raw stdout parsers); backends.py
+(SubprocessBackend + PySpiceBackend + RunResult); checks.py (evaluators
++ result classes); static_check.py (netlist + spec loading, plus
+Layer 1 topology checker).
 """
 
 import argparse
@@ -22,16 +23,17 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Make sibling modules importable without installing the package.
 sys.path.insert(0, str(Path(__file__).parent))
 
 from static_check import load_netlist, load_specs, match_spec           # noqa: E402
 from spice import (                                                     # noqa: E402
-    build_spice_deck, run_ngspice,
-    parse_node_voltages, parse_ac_output, parse_tran_output,
+    build_spice_deck, collect_xspice_cm_paths,
     spice_node, spice_ref, output_nodes_for_sweep,
 )
+from backends import make_backend                                       # noqa: E402
 from checks import (                                                    # noqa: E402
     AcResult, LoopStabilityResult, Result, CheckResult, TranResult,
     compare_expected, evaluate_dc_checks, evaluate_ac_sweep,
@@ -132,7 +134,8 @@ def _print_tran_results(tran_results: list[TranResult]):
 
 
 def _run_loop_stability(loop_name: str, loop_cfg: dict, nl, specs: dict,
-                         scenario: dict, work_dir: Path
+                         scenario: dict, work_dir: Path, backend_name: str,
+                         cm_paths: Optional[list[str]] = None
                          ) -> list[LoopStabilityResult]:
     """Break the loop at the specified pin, run one AC sweep with Middlebrook
     voltage injection, extract PM/GM/crossover, compare to expected bounds.
@@ -156,7 +159,7 @@ def _run_loop_stability(loop_name: str, loop_cfg: dict, nl, specs: dict,
     prev_mapping = nl.pin_net[key]
     nl.pin_net[key] = injected_net
     try:
-        deck_text, _ = build_spice_deck(
+        netlist, commands, _ = build_spice_deck(
             nl, specs, scenario,
             ac_sweep={"sweep": loop_cfg["sweep"],
                        "source_node": original_net},   # unused w/ loop_break
@@ -167,13 +170,13 @@ def _run_loop_stability(loop_name: str, loop_cfg: dict, nl, specs: dict,
                 "injected_node": injected_node,
             },
         )
-        deck_path = work_dir / f"{scenario['name']}_loop_{loop_name}.cir"
-        deck_path.write_text(deck_text)
-        output = run_ngspice(deck_path, work_dir)
-        samples = parse_ac_output(output,
-                                    expected_nodes=[original_node, injected_node])
-        v_orig = samples.get(original_node, [])
-        v_inj = samples.get(injected_node, [])
+        backend = make_backend(backend_name, work_dir,
+                                tag=f"{scenario['name']}_loop_{loop_name}")
+        r = backend.run(netlist, commands,
+                        expected_output_nodes=[original_node, injected_node],
+                        cm_paths=cm_paths)
+        v_orig = r.ac_samples.get(original_node, [])
+        v_inj = r.ac_samples.get(injected_node, [])
         return evaluate_loop_stability(loop_name, loop_cfg, v_orig, v_inj)
     finally:
         nl.pin_net[key] = prev_mapping
@@ -191,6 +194,12 @@ def main() -> int:
                     default=Path(os.environ.get("TMPDIR", "/tmp/claude-1000")))
     ap.add_argument("--keep-deck", action="store_true",
                     help="don't delete the generated SPICE deck (useful for debugging)")
+    ap.add_argument("--backend", choices=["subprocess", "pyspice"],
+                    default="subprocess",
+                    help="simulation backend. 'subprocess' shells out to ngspice per "
+                         "run (portable, default). 'pyspice' embeds libngspice for "
+                         "~10x faster iteration and structured output (requires "
+                         "PySpice + libngspice.so on the system).")
     args = ap.parse_args()
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -211,12 +220,16 @@ def main() -> int:
 
     _preflight_check_capabilities(nl, specs, scenario)
 
+    # XSPICE .cm files needed by any matched IC — same list for every run
+    # in this scenario. Passed to each backend.run() call.
+    cm_paths = collect_xspice_cm_paths(nl, specs)
+
     # DC op-point pass
-    deck_text, _ = build_spice_deck(nl, specs, scenario)
-    deck_path = args.work_dir / (scenario["name"] + ".cir")
-    deck_path.write_text(deck_text)
-    dc_output = run_ngspice(deck_path, args.work_dir)
-    voltages = parse_node_voltages(dc_output)
+    netlist, commands, _ = build_spice_deck(nl, specs, scenario)
+    dc_backend = make_backend(args.backend, args.work_dir,
+                               tag=scenario["name"], keep_deck=args.keep_deck)
+    dc_result = dc_backend.run(netlist, commands, cm_paths=cm_paths)
+    voltages = dc_result.node_voltages
     results = compare_expected(voltages, scenario)
     check_results = evaluate_dc_checks(nl, specs, voltages)
 
@@ -224,14 +237,15 @@ def main() -> int:
     ac_results: list[AcResult] = []
     for sweep_name, sweep in scenario.get("ac_sweeps", {}).items():
         out_nodes = [spice_node(n).lower() for n in output_nodes_for_sweep(sweep)]
-        ac_deck_text, _ = build_spice_deck(nl, specs, scenario,
-                                            ac_sweep=sweep,
-                                            ac_output_nodes=out_nodes)
-        ac_deck_path = args.work_dir / f"{scenario['name']}_ac_{sweep_name}.cir"
-        ac_deck_path.write_text(ac_deck_text)
-        ac_output = run_ngspice(ac_deck_path, args.work_dir)
-        samples = parse_ac_output(ac_output, expected_nodes=out_nodes)
-        ac_results.extend(evaluate_ac_sweep(sweep_name, sweep, samples))
+        netlist, commands, _ = build_spice_deck(nl, specs, scenario,
+                                                 ac_sweep=sweep,
+                                                 ac_output_nodes=out_nodes)
+        backend = make_backend(args.backend, args.work_dir,
+                                tag=f"{scenario['name']}_ac_{sweep_name}",
+                                keep_deck=args.keep_deck)
+        r = backend.run(netlist, commands, expected_output_nodes=out_nodes,
+                        cm_paths=cm_paths)
+        ac_results.extend(evaluate_ac_sweep(sweep_name, sweep, r.ac_samples))
 
     # Loop-stability sweeps — one ngspice run per loop, with a temporary
     # pin_net rewrite to break the loop at the specified pin. try/finally
@@ -239,20 +253,22 @@ def main() -> int:
     loop_results: list[LoopStabilityResult] = []
     for loop_name, loop_cfg in scenario.get("loop_stability", {}).items():
         loop_results.extend(_run_loop_stability(
-            loop_name, loop_cfg, nl, specs, scenario, args.work_dir))
+            loop_name, loop_cfg, nl, specs, scenario, args.work_dir,
+            args.backend, cm_paths=cm_paths))
 
     # Transient sweeps — one ngspice run per sweep
     tran_results: list[TranResult] = []
     for sweep_name, sweep in scenario.get("tran_sweeps", {}).items():
         out_nodes = [spice_node(n).lower() for n in output_nodes_for_sweep(sweep)]
-        tran_deck_text, _ = build_spice_deck(nl, specs, scenario,
-                                              tran_sweep=sweep,
-                                              tran_output_nodes=out_nodes)
-        tran_deck_path = args.work_dir / f"{scenario['name']}_tran_{sweep_name}.cir"
-        tran_deck_path.write_text(tran_deck_text)
-        tran_output = run_ngspice(tran_deck_path, args.work_dir)
-        samples = parse_tran_output(tran_output, expected_nodes=out_nodes)
-        tran_results.extend(evaluate_tran_sweep(sweep_name, sweep, samples))
+        netlist, commands, _ = build_spice_deck(nl, specs, scenario,
+                                                 tran_sweep=sweep,
+                                                 tran_output_nodes=out_nodes)
+        backend = make_backend(args.backend, args.work_dir,
+                                tag=f"{scenario['name']}_tran_{sweep_name}",
+                                keep_deck=args.keep_deck)
+        r = backend.run(netlist, commands, expected_output_nodes=out_nodes,
+                        cm_paths=cm_paths)
+        tran_results.extend(evaluate_tran_sweep(sweep_name, sweep, r.tran_samples))
 
     # Report
     if results:
@@ -279,7 +295,9 @@ def main() -> int:
           f"(of {len(all_status)} checks)")
 
     if not args.keep_deck and all(s == "pass" for s in all_status):
-        cleanup = ([deck_path]
+        # SubprocessBackend writes .cir files under work_dir; PySpiceBackend
+        # doesn't. Sweep them all here rather than plumb per-backend cleanup.
+        cleanup = (list(args.work_dir.glob(f"{scenario['name']}.cir"))
                    + list(args.work_dir.glob(f"{scenario['name']}_ac_*.cir"))
                    + list(args.work_dir.glob(f"{scenario['name']}_loop_*.cir"))
                    + list(args.work_dir.glob(f"{scenario['name']}_tran_*.cir")))

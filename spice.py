@@ -422,6 +422,72 @@ def _emit_ac_model(subckt_lines: list, x_lines: list, comp: Comp, spec: dict,
     return {matched_idx for (matched_idx, _) in resolved.values()}
 
 
+def _emit_xspice_model(a_lines: list, model_lines: list, comp: Comp,
+                        spec: dict, xspice: dict, nl: Netlist,
+                        used: set[str]) -> Optional[set[str]]:
+    """Emit `.model` + `A<ref>` for an XSPICE code model.
+
+    The .cm file itself must be loaded via `codemodel` command BEFORE
+    the netlist is parsed — see `collect_xspice_cm_paths()`. This
+    function just emits the netlist-side pieces.
+
+    Returns the set of pin_index strings the model covers, or None on
+    resolution failure."""
+    model_type = xspice["model_type"]
+    per_instance = f"{model_type}_{spice_ref(comp.ref)}"
+
+    tokens: list[str] = []
+    covered: set[str] = set()
+    for i, conn in enumerate(xspice["connections"]):
+        kind = conn["kind"]
+        if kind == "differential":
+            pos = _resolve_role_net(comp.ref, spec, conn["pos_pin"], nl)
+            if pos is None:
+                print(f"warning: {comp.ref} xspice_model connection {i} pos_pin "
+                      f"{conn['pos_pin']!r} unresolved; skipping",
+                      file=sys.stderr)
+                return None
+            covered.add(pos[0])
+            pos_node = spice_node(pos[1])
+            used.add(pos_node)
+            if "neg_pin" in conn:
+                neg = _resolve_role_net(comp.ref, spec, conn["neg_pin"], nl)
+                if neg is None:
+                    print(f"warning: {comp.ref} xspice_model connection {i} neg_pin "
+                          f"{conn['neg_pin']!r} unresolved; skipping",
+                          file=sys.stderr)
+                    return None
+                covered.add(neg[0])
+                neg_node = spice_node(neg[1])
+                used.add(neg_node)
+            else:
+                neg_node = "0"
+            tokens.append(f"%vd({pos_node} {neg_node})")
+        elif kind == "single":
+            got = _resolve_role_net(comp.ref, spec, conn["pin"], nl)
+            if got is None:
+                print(f"warning: {comp.ref} xspice_model connection {i} pin "
+                      f"{conn['pin']!r} unresolved; skipping",
+                      file=sys.stderr)
+                return None
+            covered.add(got[0])
+            node = spice_node(got[1])
+            used.add(node)
+            tokens.append(node)
+        else:
+            print(f"warning: {comp.ref} unknown xspice connection kind {kind!r}",
+                  file=sys.stderr)
+            return None
+
+    a_lines.append(f"A{spice_ref(comp.ref)} {' '.join(tokens)} {per_instance}")
+
+    param_pairs = " ".join(f"{k}={v}" for k, v in
+                            (xspice.get("model_params") or {}).items())
+    param_clause = f" ({param_pairs})" if param_pairs else ""
+    model_lines.append(f".model {per_instance} {model_type}{param_clause}")
+    return covered
+
+
 def _emit_subckt_instance(include_paths: set, x_lines: list, comp: Comp,
                            spec: dict, spec_path: Path, subckt_ref: dict,
                            nl: Netlist, used: set[str]) -> Optional[set[str]]:
@@ -461,8 +527,15 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
                       tran_sweep: Optional[dict] = None,
                       tran_output_nodes: Optional[list[str]] = None,
                       loop_break: Optional[dict] = None
-                      ) -> tuple[str, set[str]]:
-    """Return (deck_text, spice_nodes_used).
+                      ) -> tuple[str, list[str], set[str]]:
+    """Return (netlist_text, commands, spice_nodes_used).
+
+    `netlist_text` is everything from element definitions through stabilizer
+    resistors (ready to be loaded into ngspice via a file or `load_circuit`).
+    `commands` is the list of control-block commands (`tran ...`, `ac ...`,
+    `print v(...)`, etc.) — subprocess-mode execution wraps them in
+    `.control`/`.endc` via `deck_to_text()`; PySpice mode feeds them one
+    at a time to `exec_command()`.
 
     Exactly one of {None, ac_sweep, tran_sweep} may be non-None:
       - None       → .op (DC operating point)
@@ -540,6 +613,8 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
     subckt_defs: list[str] = []       # .subckt blocks from ac_model
     behavioral_x_lines: list[str] = []  # X-instances for ac_model / subckt
     include_paths: set[str] = set()   # deduped .include targets
+    xspice_model_lines: list[str] = []  # .model lines for xspice_model
+    xspice_a_lines: list[str] = []      # A-instances for xspice_model
     needs_uic = False   # set if any transient_model was emitted — forces
                         # `tran ... uic` so clamp-based sources don't get
                         # collapsed to their steady state by DC op-point
@@ -574,13 +649,20 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
             if spec_hit is None:
                 continue
             spec_path, spec = spec_hit
-            # Precedence: behavioral_spice_subckt > ac_model > per-pin dc_model.
-            # transient_model is orthogonal — active only in .tran runs; it
-            # suppresses the pin's dc_model but not its ac_model participation.
+            # Precedence: xspice_model > behavioral_spice_subckt > ac_model
+            # > per-pin dc_model. transient_model is orthogonal — active
+            # only in .tran runs; suppresses the pin's dc_model but not
+            # its ac_model participation.
             owned: set[str] = set()
+            xspice = spec.get("xspice_model")
             subckt_ref = spec.get("behavioral_spice_subckt")
             ac_model = spec.get("ac_model")
-            if subckt_ref is not None:
+            if xspice is not None:
+                cov = _emit_xspice_model(xspice_a_lines, xspice_model_lines,
+                                          comp, spec, xspice, nl, used_nodes)
+                if cov:
+                    owned = cov
+            elif subckt_ref is not None:
                 cov = _emit_subckt_instance(include_paths, behavioral_x_lines,
                                              comp, spec, spec_path, subckt_ref,
                                              nl, used_nodes)
@@ -617,6 +699,14 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
     for line in behavioral_x_lines:
         lines.append(line)
 
+    # 2e-2) XSPICE .model + A-instance lines. The .cm files themselves
+    # must be loaded via `codemodel` before netlist parse — see
+    # collect_xspice_cm_paths() and the backend layer.
+    for line in xspice_model_lines:
+        lines.append(line)
+    for line in xspice_a_lines:
+        lines.append(line)
+
     # 2f) Layer-4b Middlebrook voltage-injection source
     if loop_break is not None:
         used_nodes.add(loop_break["original_node"])
@@ -632,20 +722,21 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
     for node in sorted({n.lower() for n in used_nodes if n != "0"}):
         lines.append(f"R_stab_{node} {node} 0 {STABILIZER_R_OHMS}")
 
-    # 4) control block: .op, .ac, or .tran
+    # 4) control commands — kept as a separate list so backends can consume
+    # them differently. Subprocess backend wraps them in .control/.endc;
+    # PySpice backend feeds them one at a time to exec_command().
     # NB: ngspice truncates long node names in fixed-width print column
     # headers (`set width` doesn't affect per-column width). Parsers
     # compensate via prefix-match against expected_nodes — see
     # parse_ac_output / parse_tran_output.
-    lines.append("")
-    lines.append(".control")
+    commands: list[str] = []
     if ac_sweep is not None:
         sw = ac_sweep["sweep"]
         kind = {"decade": "dec", "octave": "oct", "linear": "lin"}[sw["kind"]]
         n = sw.get("n_points", 100) if sw["kind"] == "linear" else sw.get("points_per_decade", 10)
-        lines.append(f"ac {kind} {n} {sw['start_hz']} {sw['stop_hz']}")
+        commands.append(f"ac {kind} {n} {sw['start_hz']} {sw['stop_hz']}")
         for out_node in (ac_output_nodes or []):
-            lines.append(f"print v({out_node})")
+            commands.append(f"print v({out_node})")
     elif tran_sweep is not None:
         sw = tran_sweep["sweep"]
         # ngspice tran syntax: `tran <tstep> <tstop> [tstart] [uic]`.
@@ -655,15 +746,46 @@ def build_spice_deck(nl: Netlist, specs: dict, scenario: dict,
         # ngspice would report V(pin)=clamp_v from t=0).
         uic_tag = " uic" if needs_uic else ""
         if sw.get("start_s", 0) > 0:
-            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g} {sw['start_s']:g}{uic_tag}")
+            commands.append(f"tran {sw['step_s']:g} {sw['stop_s']:g} {sw['start_s']:g}{uic_tag}")
         else:
-            lines.append(f"tran {sw['step_s']:g} {sw['stop_s']:g}{uic_tag}")
+            commands.append(f"tran {sw['step_s']:g} {sw['stop_s']:g}{uic_tag}")
         for out_node in (tran_output_nodes or []):
-            lines.append(f"print v({out_node})")
+            commands.append(f"print v({out_node})")
     else:
-        lines.extend(["op", "let out = 0", "print all"])
-    lines.extend([".endc", ".end"])
-    return "\n".join(lines) + "\n", used_nodes
+        commands.extend(["op", "let out = 0", "print all"])
+    lines.append("")  # blank line before .end
+    return "\n".join(lines) + "\n", commands, used_nodes
+
+
+def collect_xspice_cm_paths(nl: Netlist, specs: dict) -> list[str]:
+    """Union of all `.cm` file paths referenced by any matched IC's
+    `xspice_model.cm_path`. Relative paths resolve against the spec's
+    directory; absolute paths pass through. Deduped, sorted for
+    determinism. Returned as strings (paths ready for `codemodel` command)."""
+    paths: set[str] = set()
+    for comp in nl.comps.values():
+        hit = match_spec(comp, specs)
+        if hit is None:
+            continue
+        spec_path, spec = hit
+        xm = spec.get("xspice_model")
+        if xm is None:
+            continue
+        raw = xm["cm_path"]
+        p = Path(raw)
+        if not p.is_absolute():
+            p = spec_path.parent / raw
+        paths.add(str(p.resolve()))
+    return sorted(paths)
+
+
+def deck_to_text(netlist_text: str, commands: list[str]) -> str:
+    """Combine (netlist, commands) into a single ngspice deck for
+    subprocess-mode execution. Wraps commands in .control/.endc,
+    appends .end."""
+    ctl = "\n".join([".control", *commands, ".endc", ".end"])
+    # netlist_text always ends with a newline
+    return netlist_text + ctl + "\n"
 
 
 # ---------------------------------------------------------------------------

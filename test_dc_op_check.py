@@ -51,6 +51,8 @@ SS_RAMP_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp.net.xml"
 SS_RAMP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_scenario.json"
 SS_RAMP_FAIL_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_fail_scenario.json"
 SS_RAMP_MISSING_CAP_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/ss_ramp_missing_cap_scenario.json"
+XSPICE_GAIN_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/xspice_gain.net.xml"
+XSPICE_GAIN_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/xspice_gain_scenario.json"
 POR_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/por_delay.net.xml"
 POR_SCENARIO = REPO_ROOT / "sim_harness/tests/fixtures/por_delay_scenario.json"
 PGOOD_NETLIST = REPO_ROOT / "sim_harness/tests/fixtures/pgood.net.xml"
@@ -443,6 +445,20 @@ def test_negative_layer_5c_missing_capability_warns(tmp_path):
     assert rc == 0, f"tran should still pass despite missing capability; got rc={rc}:\n{out}\n{err}"
     assert "capability pre-flight" in err
     assert "l4b_loop_stability" in err
+    assert "1 pass, 0 fail, 0 missing" in out
+
+
+@needs_ngspice_tmp
+def test_layer_5d2_xspice_gain_model(tmp_path):
+    """Loads ngspice's built-in `gain` code-model from analog.cm via the
+    xspice_model schema field. VIN=1V, gain=2.5 → VOUT=2.5V. Exercises
+    codemodel pre-load (via .spiceinit in subprocess mode; via
+    exec_command in pyspice mode), .model emission, A-line emission
+    with %vd() differential terminals."""
+    rc, out, _ = _run_checker(XSPICE_GAIN_SCENARIO, XSPICE_GAIN_NETLIST, tmp_path,
+                              components_dir=TEST_COMPONENTS_DIR)
+    assert rc == 0, f"XSPICE gain fixture failed:\n{out}"
+    assert "VOUT = +2.5000 V" in out
     assert "1 pass, 0 fail, 0 missing" in out
 
 

@@ -1,0 +1,11 @@
+{
+  "spec_version": "0",
+  "name": "xspice_gain",
+  "description": "TESTXGAIN wraps ngspice's built-in analog.cm `gain` model with gain=2.5. VIN=1V → VOUT=2.5V. End-to-end proof of the xspice_model path: .cm auto-loaded before netlist parse, .model emitted, A-instance instantiated.",
+  "requires_capabilities": ["vendor_macromodel"],
+  "power_rails": { "VIN": 1.0 },
+  "expected": {
+    "VOUT": { "v": 2.5, "tolerance_v": 0.01,
+              "rationale": "gain·V(in) = 2.5·1.0 = 2.5V." }
+  }
+}

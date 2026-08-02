@@ -62,6 +62,10 @@
       "$ref": "#/$defs/behavioral_spice_subckt",
       "description": "Path to an external SPICE .subckt (e.g. a vendor-published behavioral model). When present, the runner `.include`s the file and instantiates the named subckt with terminals in the given order. Overrides `ac_model` and per-pin `dc_model` for the mapped pins."
     },
+    "xspice_model": {
+      "$ref": "#/$defs/xspice_model",
+      "description": "Reference to an XSPICE code-model (.cm shared library). Runner loads the .cm before parsing the netlist (via .spiceinit for subprocess backend, via early exec_command for pyspice backend), emits a `.model` line with the given parameters, then instantiates the IC as an `A<ref>` XSPICE device. Use for behavior that can't be expressed with parametric topologies (Layer 5c) or a plain .subckt: chip state machines, custom analog devices, event-driven digital logic. Precedence: overrides `behavioral_spice_subckt`, `ac_model`, and per-pin `dc_model`/`transient_model` on the mapped pins."
+    },
     "modeling": {
       "$ref": "#/$defs/modeling",
       "description": "Meta-information about what THIS spec models and how faithfully. Purely informational for the runner today, but consumed by capability-suitability checks: a scenario can declare `requires_capabilities: [...]` and the runner refuses to run against a spec that doesn't claim them all. Optional; omit entirely for specs that don't want to make claims (they just don't get the pre-flight suitability check)."
@@ -457,6 +461,62 @@
           }
         }
       ]
+    },
+    "xspice_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cm_path", "model_type", "connections"],
+      "properties": {
+        "cm_path": {
+          "type": "string",
+          "description": "Path to the .cm shared library. Relative paths are resolved from the spec file's directory. Absolute paths (e.g., `/usr/lib/x86_64-linux-gnu/ngspice/analog.cm` for ngspice's built-ins) also work."
+        },
+        "model_type": {
+          "type": "string",
+          "description": "The XSPICE model-type name defined in the .cm (e.g., `gain`, `d_and`, `climit`). Runner emits `.model <ref>_<model_type> <model_type> (...)`; the per-instance name is derived to avoid collisions when the same IC appears twice."
+        },
+        "model_params": {
+          "type": "object",
+          "description": "Key/value parameters for the .model line — formatted as `key=value` in emission order. Values may be numbers or strings (strings pass through untouched, e.g. '1n' for time with SI suffix).",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "number" },
+              { "type": "string" }
+            ]
+          }
+        },
+        "connections": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered list of XSPICE terminal connections. Order MUST match the model's declaration order (A-lines are positional). Two connection kinds supported at v0: `differential` (emitted as `%vd(pos neg)`; if `neg_pin` is omitted, GND is used) and `single` (emitted as a bare node name, for digital / event-driven signals). Array connections (`[a b c]`) not yet supported — defer until needed.",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "pos_pin"],
+                "properties": {
+                  "kind": { "const": "differential" },
+                  "pos_pin": { "$ref": "#/$defs/pin_index_ref" },
+                  "neg_pin": {
+                    "$ref": "#/$defs/pin_index_ref",
+                    "description": "Optional; if omitted, GND is used as the reference."
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "pin"],
+                "properties": {
+                  "kind": { "const": "single" },
+                  "pin": { "$ref": "#/$defs/pin_index_ref" }
+                }
+              }
+            ]
+          }
+        }
+      }
     },
     "modeling": {
       "type": "object",

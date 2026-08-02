@@ -14,12 +14,17 @@ component specs. As of 2026-07-31, eight layers shipped:
 - **Layer 5c** — per-pin `transient_model` topologies for state-machine-flavored
   IC behavior (soft-start ramps, boot delays, gated outputs)
 
-Behavioral IC modeling framework (shipped 2026-07-30, Session N+1):
+Behavioral IC modeling framework (shipped 2026-07-30/31):
 - Spec-level `ac_model` — parametric linear IC model (currently
   `op_amp_single_pole`; A0 / GBW / output_z → auto-generated single-pole
   `.subckt`). Used by both DC op-point (Layer 3a) and AC sweep (Layer 4a).
 - Spec-level `behavioral_spice_subckt` — reference to an external vendor
   `.subckt` file. `.include`d verbatim; terminals wired in declaration order.
+- Spec-level `xspice_model` — reference to an XSPICE `.cm` code-model
+  (compiled shared library). Runner auto-loads the `.cm` before netlist
+  parse, emits `.model` + `A<ref>` device. Supports `differential`
+  (`%vd(pos neg)`) and `single`-ended connections. Precedence: overrides
+  `behavioral_spice_subckt`, `ac_model`, and per-pin models.
 
 Deferred: Layer 2 (topology comparator against vendor reference designs),
 Layer 5b/c/d (PWM stimulus, XSPICE code models in Rust, libngspice FFI).
@@ -121,9 +126,25 @@ Both checkers accept `--netlist <pre-exported-xml>` to skip the
 `kicad-cli sch export netlist --format kicadxml` step. Exit code 0 iff
 every check passed.
 
+**Backend selection** (Layer-3+ checker only). Two backends implement
+the simulation-runner interface; both produce numerically-equivalent
+results (locked in by `test_backends.py`):
+
+- `--backend subprocess` (default) — spawns `ngspice -b <deck.cir>` per
+  run, parses stdout. Portable, works anywhere ngspice is installed.
+- `--backend pyspice` — embeds libngspice in-process via PySpice's
+  NgSpiceShared. Structured data (no stdout regex), foundation for
+  Stages 5d-2 (XSPICE .cm loading) and 5d-3 (callback-driven adaptive
+  stimulus). Requires `libngspice0` and `pip install PySpice`. If
+  libngspice isn't at `/usr/lib/x86_64-linux-gnu/libngspice.so.0`,
+  override via `SIM_HARNESS_LIBNGSPICE=/path/to/libngspice.so`. Perf
+  win only shows in long-lived processes (test harness with per-test
+  Python startup doesn't benefit from FFI vs. subprocess yet).
+
 **Sandbox caveat:** ngspice's glibc `tmpfile()` writes to `/tmp/tmpXXXXXX`,
-which the sandbox typically blocks. Bash calls that shell out to ngspice
-need `dangerouslyDisableSandbox: true`, or `/tmp/tmp*` needs to be in the
+which the sandbox typically blocks. Same issue applies to both backends
+(FFI is in-process but the C `tmpfile()` call still hits `/tmp`). Bash
+calls need `dangerouslyDisableSandbox: true`, or `/tmp/tmp*` in the
 `sandbox.filesystem.allowWrite` allowlist. See `[[feedback-ngspice-sandbox]]`.
 
 ## Adding a component spec

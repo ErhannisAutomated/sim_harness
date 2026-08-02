@@ -1,0 +1,28 @@
+{
+  "spec_version": "0",
+  "mpn": "TESTXGAIN",
+  "package": "SYNTHETIC-2",
+  "pins": [
+    { "index": 1, "name": "IN", "direction": "input" },
+    { "index": 2, "name": "OUT", "direction": "output" }
+  ],
+  "xspice_model": {
+    "cm_path": "/usr/lib/x86_64-linux-gnu/ngspice/analog.cm",
+    "model_type": "gain",
+    "model_params": { "gain": 2.5 },
+    "connections": [
+      { "kind": "differential", "pos_pin": 1 },
+      { "kind": "differential", "pos_pin": 2 }
+    ]
+  },
+  "modeling": {
+    "capabilities": ["vendor_macromodel"],
+    "simplifications": [
+      {
+        "scope": "component", "target": "",
+        "kind": "idealized",
+        "note": "Fixture uses ngspice's built-in analog.cm `gain` model as a stand-in for a real vendor XSPICE macromodel. Purely to exercise the .cm loading + A-instance emission pipeline."
+      }
+    ]
+  }
+}
